@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, View, FlatList, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
-import { Bell, Calendar, DollarSign, Clock, Briefcase, FileText, CheckCircle, AlertCircle } from 'lucide-react-native';
+import { Bell, Calendar, DollarSign, Clock, FileText, CheckCircle, AlertCircle } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { EmptyState } from '../components/ui/EmptyState';

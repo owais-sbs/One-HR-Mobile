@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer } from '@react-navigation/native';
@@ -6,6 +6,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Home, ClipboardList, DollarSign, User, Bell } from 'lucide-react-native';
 import * as SplashScreen from 'expo-splash-screen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { 
   useFonts, 
   Poppins_400Regular, 
@@ -27,6 +28,7 @@ import SecurityScreen from './src/screens/SecurityScreen';
 import NotificationScreen from './src/screens/NotificationScreen';
 import ApplyLeaveScreen from './src/screens/ApplyLeaveScreen';
 import { colors } from './src/theme/colors';
+import { STORAGE_KEYS } from './src/config/apiConfig';
 
 // Keep the splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
@@ -123,13 +125,38 @@ export default function App() {
     Poppins_700Bold,
   });
 
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    checkAuth();
+  }, []);
+
+  const checkAuth = async () => {
+    try {
+      const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+      const rolesStr = await AsyncStorage.getItem(STORAGE_KEYS.USER_ROLES);
+      
+      if (token && rolesStr) {
+        const roles = JSON.parse(rolesStr);
+        if (roles.includes('employee')) {
+          setIsAuthenticated(true);
+        }
+      }
+    } catch (error) {
+      console.error('Auth check error:', error);
+    } finally {
+      setIsReady(true);
+    }
+  };
+
   const onLayoutRootView = useCallback(async () => {
-    if (fontsLoaded) {
+    if (fontsLoaded && isReady) {
       await SplashScreen.hideAsync();
     }
-  }, [fontsLoaded]);
+  }, [fontsLoaded, isReady]);
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded || !isReady) {
     return null;
   }
 
@@ -137,7 +164,7 @@ export default function App() {
     <SafeAreaProvider onLayout={onLayoutRootView}>
       <NavigationContainer>
         <StatusBar style="auto" />
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
+        <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={isAuthenticated ? 'Main' : 'Login'}>
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="Main" component={MainTabs} />
         </Stack.Navigator>

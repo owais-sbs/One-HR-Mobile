@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text as RNText, TextProps, StyleSheet } from 'react-native';
+import { Text as RNText, TextProps } from 'react-native';
 import { colors } from '../../theme/colors';
 
 interface CustomTextProps extends TextProps {
@@ -44,5 +44,3 @@ export const Text: React.FC<CustomTextProps> = ({
     </RNText>
   );
 };
-
-const styles = StyleSheet.create({});

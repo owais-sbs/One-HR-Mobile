@@ -1,11 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
   ScrollView,
-  Pressable
+  Pressable,
+  Alert,
+  ActivityIndicator
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import {
   Calendar,
@@ -13,7 +17,8 @@ import {
   LogIn,
   LogOut,
   TrendingUp,
-  UserCheck
+  UserCheck,
+  Clock
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { StatCard } from '../components/ui/StatCard';
@@ -21,17 +26,206 @@ import { Button } from '../components/ui/Button';
 import { LeaveCard } from '../components/ui/LeaveCard';
 import { CustomBarChart } from '../components/ui/CustomBarChart';
 import { CustomPieChart } from '../components/ui/CustomPieChart';
+import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
+import apiClient from '../api/apiClient';
+
+function getInitials(firstName?: string, lastName?: string) {
+  const f = firstName?.charAt(0) || '';
+  const l = lastName?.charAt(0) || '';
+  return (f + l).toUpperCase() || '??';
+}
+
+function formatDuration(ms: number) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const hh = hours.toString().padStart(2, '0');
+  const mm = minutes.toString().padStart(2, '0');
+  const ss = seconds.toString().padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function formatTime(dateStr?: string) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
+function extractTimeFromDateTime(dateTimeStr?: string) {
+  if (!dateTimeStr) return null;
+  // Parse LocalDateTime string like "1970-01-01T09:00:00" manually to avoid UTC issues
+  const match = dateTimeStr.match(/T(\d{2}):(\d{2}):(\d{2})/);
+  if (!match) {
+    const d = new Date(dateTimeStr);
+    if (isNaN(d.getTime())) return null;
+    return d;
+  }
+  const hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0);
+}
 
 export default function DashboardScreen({ navigation }: any) {
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [employee, setEmployee] = useState<any>(null);
+  const [todayAttendance, setTodayAttendance] = useState<any>(null);
+  const [workingHours, setWorkingHours] = useState<any>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [loading, setLoading] = useState(false);
 
+  // Update current time every second
   useEffect(() => {
     const timer = setInterval(() => {
       setCurrentTime(new Date());
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Update elapsed time when clocked in
+  useEffect(() => {
+    if (!isClockedIn || !todayAttendance?.inTime) return;
+    const inTime = new Date(todayAttendance.inTime);
+    const updateElapsed = () => {
+      setElapsedMs(Date.now() - inTime.getTime());
+    };
+    updateElapsed();
+    const interval = setInterval(updateElapsed, 1000);
+    return () => clearInterval(interval);
+  }, [isClockedIn, todayAttendance]);
+
+  const loadDashboardData = useCallback(async () => {
+    try {
+      const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
+      if (cached) {
+        const emp = JSON.parse(cached);
+        setEmployee(emp);
+
+        // Fetch today's attendance
+        await fetchTodayAttendance();
+
+        // Fetch working hours for company
+        if (emp?.companyId) {
+          await fetchWorkingHours(emp.companyId);
+        }
+      }
+    } catch (error) {
+      console.error('Dashboard load error:', error);
+    }
+  }, []);
+
+  const fetchTodayAttendance = async () => {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.ATTENDANCE.TODAY);
+      const data = response.data?.data;
+      if (data) {
+        setTodayAttendance(data);
+        setIsClockedIn(data.outTime == null);
+        if (data.outTime) {
+          const inTime = new Date(data.inTime).getTime();
+          const outTime = new Date(data.outTime).getTime();
+          setElapsedMs(outTime - inTime);
+        }
+      } else {
+        setTodayAttendance(null);
+        setIsClockedIn(false);
+        setElapsedMs(0);
+      }
+    } catch (error) {
+      console.error('Fetch attendance error:', error);
+      setTodayAttendance(null);
+      setIsClockedIn(false);
+    }
+  };
+
+  const fetchWorkingHours = async (companyId: number) => {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.WORKING_HOURS.BY_COMPANY(companyId));
+      setWorkingHours(response.data?.data || null);
+    } catch (error) {
+      console.error('Fetch working hours error:', error);
+      setWorkingHours(null);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboardData();
+    }, [loadDashboardData])
+  );
+
+  const handleClockIn = () => {
+    Alert.alert(
+      'Clock In',
+      'Are you sure you want to clock in?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clock In',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const response = await apiClient.post(API_ENDPOINTS.ATTENDANCE.CLOCK_IN);
+              if (response.data?.isSuccess === false) {
+                Alert.alert('Error', response.data?.error || 'Clock in failed');
+                return;
+              }
+              const data = response.data?.data;
+              if (data) {
+                setTodayAttendance(data);
+                setIsClockedIn(true);
+                setElapsedMs(0);
+              }
+            } catch (error: any) {
+              const msg = error?.response?.data?.error || error?.message || 'Clock in failed';
+              Alert.alert('Error', msg);
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleClockOut = () => {
+    Alert.alert(
+      'Clock Out',
+      'Are you sure you want to clock out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clock Out',
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const response = await apiClient.post(API_ENDPOINTS.ATTENDANCE.CLOCK_OUT);
+              if (response.data?.isSuccess === false) {
+                Alert.alert('Error', response.data?.error || 'Clock out failed');
+                return;
+              }
+              const data = response.data?.data;
+              if (data) {
+                setTodayAttendance(data);
+                setIsClockedIn(false);
+                const inTime = new Date(data.inTime).getTime();
+                const outTime = new Date(data.outTime).getTime();
+                setElapsedMs(outTime - inTime);
+              }
+            } catch (error: any) {
+              const msg = error?.response?.data?.error || error?.message || 'Clock out failed';
+              Alert.alert('Error', msg);
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   const dateStr = currentTime.toLocaleDateString('en-US', {
     weekday: 'short',
@@ -53,6 +247,16 @@ export default function DashboardScreen({ navigation }: any) {
     { type: 'Casual Leave', left: 4, total: 5, color: colors.warning },
   ];
 
+  const workStartTime = extractTimeFromDateTime(workingHours?.startTime);
+  const workEndTime = extractTimeFromDateTime(workingHours?.endTime);
+  const workDurationMs = workStartTime && workEndTime
+    ? (workEndTime.getTime() - workStartTime.getTime())
+    : 0;
+
+  const progressPercent = workDurationMs > 0
+    ? Math.min(100, Math.round((elapsedMs / workDurationMs) * 100))
+    : 0;
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView
@@ -65,7 +269,9 @@ export default function DashboardScreen({ navigation }: any) {
               Good Morning
             </Text>
             <Text variant="bold" size={18} color={colors.text.primary}>
-              Kiran Loka
+              {employee
+                ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.accountName || 'Employee'
+                : 'Employee'}
             </Text>
           </View>
           <Pressable
@@ -75,7 +281,9 @@ export default function DashboardScreen({ navigation }: any) {
               { opacity: pressed ? 0.7 : 1 }
             ]}
           >
-            <Text variant="semibold" size={12} color={colors.text.primary}>KL</Text>
+            <Text variant="semibold" size={12} color={colors.text.primary}>
+              {getInitials(employee?.firstName, employee?.lastName)}
+            </Text>
           </Pressable>
         </View>
 
@@ -90,14 +298,60 @@ export default function DashboardScreen({ navigation }: any) {
             {timeStr}
           </Text>
 
+          {todayAttendance?.inTime && (
+            <View style={styles.loggedHoursContainer}>
+              <Clock size={14} color="rgba(255,255,255,0.8)" />
+              <Text variant="medium" size={12} color="rgba(255,255,255,0.8)" style={styles.loggedHoursText}>
+                {isClockedIn ? 'Logged In: ' : 'Total Hours: '}
+                {formatDuration(elapsedMs)}
+              </Text>
+            </View>
+          )}
+
+          {workingHours && (
+            <View style={styles.workingHoursRow}>
+              <Text variant="regular" size={10} color="rgba(255,255,255,0.5)">
+                Work: {workStartTime ? workStartTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—'} — {workEndTime ? workEndTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—'}
+              </Text>
+            </View>
+          )}
+
+          {workDurationMs > 0 && (
+            <View style={styles.progressContainer}>
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
+              </View>
+              <Text variant="regular" size={9} color="rgba(255,255,255,0.5)">
+                {progressPercent}% of daily hours
+              </Text>
+            </View>
+          )}
+
+          {todayAttendance?.inTime && (
+            <View style={styles.timesRow}>
+              <View style={styles.timeBox}>
+                <Text variant="regular" size={9} color="rgba(255,255,255,0.5)">In</Text>
+                <Text variant="semibold" size={12} color="#FFFFFF">{formatTime(todayAttendance.inTime)}</Text>
+              </View>
+              {todayAttendance?.outTime && (
+                <View style={styles.timeBox}>
+                  <Text variant="regular" size={9} color="rgba(255,255,255,0.5)">Out</Text>
+                  <Text variant="semibold" size={12} color="#FFFFFF">{formatTime(todayAttendance.outTime)}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
           <Button
-            onPress={() => setIsClockedIn(!isClockedIn)}
+            onPress={isClockedIn ? handleClockOut : handleClockIn}
             title={isClockedIn ? "Clock Out" : "Clock In"}
             variant={isClockedIn ? "danger" : "secondary"}
             size="sm"
             icon={isClockedIn ? <LogOut size={14} color="#fff" /> : <LogIn size={14} color="#fff" />}
             style={styles.clockButton}
+            disabled={loading}
           />
+          {loading && <ActivityIndicator style={styles.loader} color="#FFFFFF" />}
         </View>
 
         <View style={styles.statsRow}>
@@ -198,7 +452,7 @@ export default function DashboardScreen({ navigation }: any) {
             </View>
             <View style={styles.itemContent}>
               <Text variant="semibold" size={13} color={colors.text.primary}>
-                New Year's Eve
+                New Year&apos;s Eve
               </Text>
               <Text variant="regular" size={11} color={colors.text.secondary}>
                 31 Dec 2024
@@ -262,13 +516,54 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
   timeText: {
-    marginBottom: 12,
+    marginBottom: 8,
     letterSpacing: 0.5,
+  },
+  loggedHoursContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  loggedHoursText: {
+    letterSpacing: 0.3,
+  },
+  workingHoursRow: {
+    marginBottom: 8,
+  },
+  progressContainer: {
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  progressBarBg: {
+    width: '100%',
+    height: 6,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 3,
+    marginBottom: 4,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#34C759',
+    borderRadius: 3,
+  },
+  timesRow: {
+    flexDirection: 'row',
+    gap: 24,
+    marginBottom: 12,
+  },
+  timeBox: {
+    alignItems: 'center',
   },
   clockButton: {
     width: '100%',
     borderRadius: 10,
     height: 40,
+  },
+  loader: {
+    marginTop: 8,
   },
   statsRow: {
     flexDirection: 'row',

@@ -1,6 +1,8 @@
-import React from 'react';
-import { StyleSheet, View, ScrollView, Pressable } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { StyleSheet, View, ScrollView, Pressable, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import {
   User,
@@ -13,23 +15,13 @@ import {
   Settings,
   Bell,
   Calendar,
-  Clock,
   Award,
   Building2
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
-import { StatCard } from '../components/ui/StatCard';
-
-interface MenuItemProps {
-  icon: React.ComponentType<any>;
-  label: string;
-  subtitle?: string;
-  color: string;
-  onPress: () => void;
-  showChevron?: boolean;
-  destructive?: boolean;
-}
+import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
+import apiClient from '../api/apiClient';
 
 const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = true, destructive = false }: any) => (
   <Pressable
@@ -58,7 +50,107 @@ const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = tr
   </Pressable>
 );
 
+function getInitials(firstName?: string, lastName?: string) {
+  const f = firstName?.charAt(0) || '';
+  const l = lastName?.charAt(0) || '';
+  return (f + l).toUpperCase() || '??';
+}
+
+function calculateTenure(joiningDate?: string) {
+  if (!joiningDate) return '-';
+  const start = new Date(joiningDate);
+  const now = new Date();
+  const diffMs = now.getTime() - start.getTime();
+  const diffYears = diffMs / (1000 * 60 * 60 * 24 * 365.25);
+  if (diffYears < 1) {
+    const months = Math.round(diffYears * 12);
+    return `${months} mos`;
+  }
+  const years = Math.floor(diffYears);
+  const months = Math.round((diffYears - years) * 12);
+  return months > 0 ? `${years}.${Math.round(months / 12 * 10) / 1} yrs` : `${years} yrs`;
+}
+
 export default function ProfileScreen({ navigation }: any) {
+  const [employee, setEmployee] = useState<any>(null);
+  const [department, setDepartment] = useState<string>('');
+  const [roles, setRoles] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadProfile = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [rolesJson, cachedEmployee] = await AsyncStorage.multiGet([
+        STORAGE_KEYS.USER_ROLES,
+        STORAGE_KEYS.EMPLOYEE_DATA,
+      ]);
+
+      const parsedRoles = rolesJson[1] ? JSON.parse(rolesJson[1]) : [];
+      setRoles(parsedRoles);
+
+      let employeeData = cachedEmployee[1] ? JSON.parse(cachedEmployee[1]) : null;
+
+      // Always fetch fresh data from the API
+      const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.ME);
+      if (response.data) {
+        employeeData = response.data;
+        await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(employeeData));
+      }
+
+      setEmployee(employeeData);
+
+      // Fetch department name if available
+      if (employeeData?.departmentId) {
+        try {
+          const deptResponse = await apiClient.get(API_ENDPOINTS.DEPARTMENTS.BY_ID(employeeData.departmentId));
+          if (deptResponse.data?.name) {
+            setDepartment(deptResponse.data.name);
+          }
+        } catch (e) {
+          // ignore department fetch errors
+        }
+      }
+    } catch (error) {
+      console.error('Profile load error:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [loadProfile])
+  );
+
+  const handleSignOut = async () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await AsyncStorage.multiRemove([
+                STORAGE_KEYS.AUTH_TOKEN,
+                STORAGE_KEYS.USER_ID,
+                STORAGE_KEYS.USER_DATA,
+                STORAGE_KEYS.USER_ROLES,
+                STORAGE_KEYS.EMPLOYEE_DATA,
+              ]);
+              navigation.navigate('Login');
+            } catch (error) {
+              console.error('Sign out error:', error);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const menuSections = [
     {
       title: 'Personal',
@@ -105,13 +197,27 @@ export default function ProfileScreen({ navigation }: any) {
           icon: LogOut,
           label: 'Sign Out',
           color: colors.error,
-          action: () => navigation.navigate('Login'),
+          action: handleSignOut,
           showChevron: false,
           destructive: true,
         },
       ],
     },
   ];
+
+  const fullName = employee
+    ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.accountName || 'Employee'
+    : '...';
+
+  const displayRole = roles.length > 0 ? roles[0] : 'Employee';
+
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -127,14 +233,16 @@ export default function ProfileScreen({ navigation }: any) {
         <View style={styles.profileCard}>
           <View style={styles.avatarSection}>
             <View style={styles.avatar}>
-              <Text variant="bold" size={24} color="#FFFFFF">KL</Text>
+              <Text variant="bold" size={24} color="#FFFFFF">
+                {getInitials(employee?.firstName, employee?.lastName)}
+              </Text>
             </View>
             <View style={styles.profileInfo}>
               <Text variant="bold" size={18} color={colors.text.primary}>
-                Kiran Loka
+                {fullName}
               </Text>
               <Text variant="regular" size={13} color={colors.text.secondary}>
-                Senior Software Engineer
+                {displayRole}
               </Text>
             </View>
           </View>
@@ -144,7 +252,9 @@ export default function ProfileScreen({ navigation }: any) {
               <View style={styles.statIconWrap}>
                 <Calendar size={14} color={colors.secondary} strokeWidth={2} />
               </View>
-              <Text variant="semibold" size={12} color={colors.text.primary}>2.5 yrs</Text>
+              <Text variant="semibold" size={12} color={colors.text.primary}>
+                {calculateTenure(employee?.joiningDate)}
+              </Text>
               <Text variant="regular" size={10} color={colors.text.muted}>Tenure</Text>
             </View>
             <View style={styles.statDivider} />
@@ -152,7 +262,9 @@ export default function ProfileScreen({ navigation }: any) {
               <View style={styles.statIconWrap}>
                 <Building2 size={14} color={colors.secondary} strokeWidth={2} />
               </View>
-              <Text variant="semibold" size={12} color={colors.text.primary}>Engineering</Text>
+              <Text variant="semibold" size={12} color={colors.text.primary}>
+                {department || '—'}
+              </Text>
               <Text variant="regular" size={10} color={colors.text.muted}>Department</Text>
             </View>
             <View style={styles.statDivider} />
@@ -160,8 +272,10 @@ export default function ProfileScreen({ navigation }: any) {
               <View style={styles.statIconWrap}>
                 <Award size={14} color={colors.secondary} strokeWidth={2} />
               </View>
-              <Text variant="semibold" size={12} color={colors.text.primary}>Level 3</Text>
-              <Text variant="regular" size={10} color={colors.text.muted}>Grade</Text>
+              <Text variant="semibold" size={12} color={colors.text.primary}>
+                {employee?.leaveBalance ?? '—'}
+              </Text>
+              <Text variant="regular" size={10} color={colors.text.muted}>Leave Balance</Text>
             </View>
           </View>
         </View>
@@ -176,7 +290,7 @@ export default function ProfileScreen({ navigation }: any) {
                 <Mail size={15} color={colors.success} strokeWidth={2} />
               </View>
               <Text variant="regular" size={13} color={colors.text.secondary} style={styles.contactText}>
-                kiran.loka@company.com
+                {employee?.email || '—'}
               </Text>
             </View>
             <View style={styles.contactItem}>
@@ -184,7 +298,7 @@ export default function ProfileScreen({ navigation }: any) {
                 <Phone size={15} color={colors.secondary} strokeWidth={2} />
               </View>
               <Text variant="regular" size={13} color={colors.text.secondary} style={styles.contactText}>
-                +1 (555) 000-1234
+                {employee?.phone || '—'}
               </Text>
             </View>
             <View style={styles.contactItem}>
@@ -192,7 +306,7 @@ export default function ProfileScreen({ navigation }: any) {
                 <MapPin size={15} color="#7c3aed" strokeWidth={2} />
               </View>
               <Text variant="regular" size={13} color={colors.text.secondary} style={styles.contactText}>
-                New York, USA
+                {employee?.address || employee?.nationality || '—'}
               </Text>
             </View>
           </View>
@@ -222,6 +336,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FAFAFA',
+  },
+  centered: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   scrollContent: {
     padding: 16,

@@ -1,2 +1,42 @@
-dist
+# Dependencies
+node_modules/
+
+# Expo
+.expo/
+.expo-shared/
+
+# Build outputs
+dist/
+web-build/
+*.tgz
+
+# Environment variables
 .env
+.env*.local
+
+# macOS
+.DS_Store
+
+# Log files
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# React Native / Metro
+*.orig.*
+
+# Android / iOS build artifacts (if ejected)
+android/build/
+android/app/build/
+ios/build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision

@@ -1,19 +1,41 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { StyleSheet, View, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { Briefcase, Building2, MapPin, Globe, Users, Calendar } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
+import { STORAGE_KEYS } from '../config/apiConfig';
 
 export default function CompanyDetailsScreen({ navigation }: any) {
+  const [employee, setEmployee] = useState<any>(null);
+
+  const loadEmployee = useCallback(async () => {
+    try {
+      const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
+      if (cached) {
+        setEmployee(JSON.parse(cached));
+      }
+    } catch (error) {
+      console.error('CompanyDetails load error:', error);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadEmployee();
+    }, [loadEmployee])
+  );
+
   const companyInfo = [
-    { icon: Building2, label: 'Company Name', value: 'OnePath Innovations' },
-    { icon: Briefcase, label: 'Department', value: 'Engineering' },
-    { icon: Users, label: 'Manager', value: 'Sarah Johnson' },
-    { icon: MapPin, label: 'Work Location', value: 'New York HQ' },
-    { icon: Globe, label: 'Company Website', value: 'www.onepath.com' },
-    { icon: Calendar, label: 'Employment Type', value: 'Full-time' },
+    { icon: Building2, label: 'Company ID', value: employee?.companyId ? String(employee.companyId) : '—' },
+    { icon: Briefcase, label: 'Department ID', value: employee?.departmentId ? String(employee.departmentId) : '—' },
+    { icon: Briefcase, label: 'Designation ID', value: employee?.designationId ? String(employee.designationId) : '—' },
+    { icon: Users, label: 'Reporting Manager ID', value: employee?.reportingManagerId ? String(employee.reportingManagerId) : '—' },
+    { icon: Calendar, label: 'Joining Date', value: employee?.joiningDate || '—' },
+    { icon: Globe, label: 'Employee ID', value: employee?.employeeId ? String(employee.employeeId) : '—' },
   ];
 
   return (
@@ -24,8 +46,8 @@ export default function CompanyDetailsScreen({ navigation }: any) {
           <View style={styles.logoContainer}>
             <Building2 size={32} color={colors.secondary} />
           </View>
-          <Text variant="bold" size={20} color={colors.text.primary}>OnePath Innovations</Text>
-          <Text variant="medium" size={14} color={colors.text.secondary}>Software & Technology</Text>
+          <Text variant="bold" size={20} color={colors.text.primary}>Company Details</Text>
+          <Text variant="medium" size={14} color={colors.text.secondary}>Employment Information</Text>
         </View>
 
         <View style={styles.card}>

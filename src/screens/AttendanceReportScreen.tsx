@@ -1,69 +1,120 @@
-import React from 'react';
-import { StyleSheet, View, FlatList } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { StyleSheet, View, FlatList, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import { Clock, Calendar, ClipboardList } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { EmptyState } from '../components/ui/EmptyState';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
+import apiClient from '../api/apiClient';
+import { API_ENDPOINTS } from '../config/apiConfig';
+
+function formatDate(dateStr?: string) {
+  if (!dateStr) return '-';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+}
+
+function formatTime(dateStr?: string) {
+  if (!dateStr) return '-';
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
+}
+
+function getDuration(inTime?: string, outTime?: string) {
+  if (!inTime || !outTime) return null;
+  const start = new Date(inTime).getTime();
+  const end = new Date(outTime).getTime();
+  const ms = end - start;
+  const hours = Math.floor(ms / 3600000);
+  const mins = Math.floor((ms % 3600000) / 60000);
+  return `${hours}h ${mins}m`;
+}
 
 export default function AttendanceReportScreen({ navigation }: any) {
-  const attendanceData = [
-    { id: '1', date: '15 Apr', checkIn: '09:00 AM', checkOut: '06:00 PM', status: 'Present' },
-    { id: '2', date: '14 Apr', checkIn: '08:55 AM', checkOut: '06:10 PM', status: 'Present' },
-    { id: '3', date: '13 Apr', checkIn: '-', checkOut: '-', status: 'On Leave' },
-    { id: '4', date: '12 Apr', checkIn: '09:15 AM', checkOut: '06:00 PM', status: 'Present' },
-    { id: '5', date: '11 Apr', checkIn: '09:00 AM', checkOut: '05:45 PM', status: 'Present' },
-  ];
+  const [attendanceData, setAttendanceData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const renderItem = ({ item }: { item: any }) => (
-    <View style={styles.logItem}>
-      <View style={styles.logDateContainer}>
-        <Text variant="bold" size={16} color={colors.text.primary}>
-          {item.date.split(' ')[0]}
-        </Text>
-        <Text variant="medium" size={12} color={colors.text.secondary}>
-          {item.date.split(' ')[1]}
-        </Text>
-      </View>
-      <View style={styles.logInfo}>
-        <View style={styles.logTimeRow}>
-          <Clock size={14} color={colors.text.muted} />
-          <Text variant="regular" size={13} color={colors.text.secondary} style={styles.logTimeText}>
-            {item.checkIn} - {item.checkOut}
+  const loadAttendance = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.ATTENDANCE.HISTORY);
+      const data = response.data?.data || [];
+      setAttendanceData(data);
+    } catch (error) {
+      console.error('Attendance history error:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadAttendance();
+    }, [loadAttendance])
+  );
+
+  const presentCount = attendanceData.filter((a) => a.outTime && a.inTime).length;
+  const absentCount = attendanceData.filter((a) => !a.inTime).length;
+  const onLeaveCount = 0; // TODO: integrate with leave module
+
+  const renderItem = ({ item }: { item: any }) => {
+    const isPresent = item.inTime != null;
+    const status = item.outTime ? 'Present' : isPresent ? 'Clocked In' : 'Absent';
+    const duration = getDuration(item.inTime, item.outTime);
+
+    return (
+      <View style={styles.logItem}>
+        <View style={styles.logDateContainer}>
+          <Text variant="bold" size={16} color={colors.text.primary}>
+            {formatDate(item.inTime).split(' ')[0]}
+          </Text>
+          <Text variant="medium" size={12} color={colors.text.secondary}>
+            {formatDate(item.inTime).split(' ')[1]}
           </Text>
         </View>
-        <Text variant="regular" size={12} color={colors.text.muted}>
-          Shift: General (09:00 - 18:00)
-        </Text>
+        <View style={styles.logInfo}>
+          <View style={styles.logTimeRow}>
+            <Clock size={14} color={colors.text.muted} />
+            <Text variant="regular" size={13} color={colors.text.secondary} style={styles.logTimeText}>
+              {isPresent ? `${formatTime(item.inTime)} - ${item.outTime ? formatTime(item.outTime) : '—'}` : '—'}
+            </Text>
+          </View>
+          {duration && (
+            <Text variant="regular" size={12} color={colors.text.muted}>
+              Duration: {duration}
+            </Text>
+          )}
+        </View>
+        <StatusBadge status={status} />
       </View>
-      <StatusBadge status={item.status} />
-    </View>
-  );
+    );
+  };
 
   const ListHeader = () => (
     <View style={styles.headerContent}>
       <View style={styles.monthSelector}>
         <Calendar size={18} color={colors.secondary} />
         <Text variant="bold" size={15} color={colors.secondary} style={styles.currentMonth}>
-          April 2024
+          Attendance History
         </Text>
       </View>
 
       <View style={styles.summaryCard}>
         <View style={styles.summaryItem}>
-          <Text variant="bold" size={20} color="#FFFFFF">22</Text>
+          <Text variant="bold" size={20} color="#FFFFFF">{presentCount}</Text>
           <Text variant="medium" size={11} color="rgba(255,255,255,0.6)">Present</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.summaryItem}>
-          <Text variant="bold" size={20} color="#FFFFFF">2</Text>
+          <Text variant="bold" size={20} color="#FFFFFF">{absentCount}</Text>
           <Text variant="medium" size={11} color="rgba(255,255,255,0.6)">Absent</Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.summaryItem}>
-          <Text variant="bold" size={20} color="#FFFFFF">4</Text>
+          <Text variant="bold" size={20} color="#FFFFFF">{onLeaveCount}</Text>
           <Text variant="medium" size={11} color="rgba(255,255,255,0.6)">Leave</Text>
         </View>
       </View>
@@ -77,21 +128,27 @@ export default function AttendanceReportScreen({ navigation }: any) {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScreenHeader title="Attendance Report" />
-      <FlatList
-        data={attendanceData}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        ListHeaderComponent={ListHeader}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <EmptyState
-            title="No logs found"
-            message="You haven't recorded any attendance logs for this period."
-            icon={<ClipboardList size={48} color={colors.text.muted} />}
-          />
-        }
-      />
+      {loading ? (
+        <View style={styles.loader}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : (
+        <FlatList
+          data={attendanceData}
+          renderItem={renderItem}
+          keyExtractor={(item) => String(item.id)}
+          ListHeaderComponent={ListHeader}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <EmptyState
+              title="No logs found"
+              message="You haven't recorded any attendance logs for this period."
+              icon={<ClipboardList size={48} color={colors.text.muted} />}
+            />
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -100,6 +157,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  loader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   listContent: {
     padding: 16,

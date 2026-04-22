@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useCallback } from "react";
 import { View, StyleSheet, Dimensions, ViewStyle } from "react-native";
 import Svg, {
   Polygon,
@@ -41,10 +41,10 @@ export const CustomRadarChart: React.FC<CustomRadarChartProps> = ({
   const radius = center - 36;
   const angleStep = (Math.PI * 2) / data.length;
 
-  const getPoint = (r: number, angle: number) => ({
+  const getPoint = useCallback((r: number, angle: number) => ({
     x: center + r * Math.cos(angle - Math.PI / 2),
     y: center + r * Math.sin(angle - Math.PI / 2),
-  });
+  }), [center]);
 
   const gridPolygons = useMemo(() => {
     return GRID_LEVELS.map((level) =>
@@ -55,11 +55,11 @@ export const CustomRadarChart: React.FC<CustomRadarChartProps> = ({
         })
         .join(" "),
     );
-  }, [data.length, radius, angleStep]);
+  }, [data, radius, angleStep, getPoint]);
 
   const axes = useMemo(() => {
     return data.map((_, i) => getPoint(radius, angleStep * i));
-  }, [data.length, radius, angleStep]);
+  }, [data, radius, angleStep, getPoint]);
 
   const dataPoints = useMemo(() => {
     return data
@@ -68,7 +68,7 @@ export const CustomRadarChart: React.FC<CustomRadarChartProps> = ({
         return `${p.x},${p.y}`;
       })
       .join(" ");
-  }, [data, radius, angleStep]);
+  }, [data, radius, angleStep, getPoint]);
 
   const labelConfigs = useMemo(() => {
     return data.map((d, i) => {
@@ -86,7 +86,7 @@ export const CustomRadarChart: React.FC<CustomRadarChartProps> = ({
 
       return { ...d, p, textAnchor, dy, angle };
     });
-  }, [data, radius, angleStep]);
+  }, [data, radius, angleStep, getPoint]);
 
   return (
     <View style={[styles.container, style]}>

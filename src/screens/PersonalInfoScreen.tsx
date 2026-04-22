@@ -1,19 +1,47 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { StyleSheet, View, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
-import { User, Mail, Phone, MapPin, Briefcase, Calendar } from 'lucide-react-native';
+import { User, Mail, Phone, MapPin, Briefcase, Calendar, Flag, Heart } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
+import { STORAGE_KEYS } from '../config/apiConfig';
 
 export default function PersonalInfoScreen({ navigation }: any) {
+  const [employee, setEmployee] = useState<any>(null);
+
+  const loadEmployee = useCallback(async () => {
+    try {
+      const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
+      if (cached) {
+        setEmployee(JSON.parse(cached));
+      }
+    } catch (error) {
+      console.error('PersonalInfo load error:', error);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadEmployee();
+    }, [loadEmployee])
+  );
+
+  const fullName = employee
+    ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.accountName || '—'
+    : '—';
+
   const infoItems = [
-    { icon: User, label: 'Full Name', value: 'Kiran Loka' },
-    { icon: Briefcase, label: 'Job Title', value: 'Senior Software Engineer' },
-    { icon: Mail, label: 'Email Address', value: 'kiran.loka@company.com' },
-    { icon: Phone, label: 'Phone Number', value: '+1 (555) 000-1234' },
-    { icon: MapPin, label: 'Location', value: 'New York, USA' },
-    { icon: Calendar, label: 'Joining Date', value: '12 Jan 2022' },
+    { icon: User, label: 'Full Name', value: fullName },
+    { icon: Mail, label: 'Email Address', value: employee?.email || '—' },
+    { icon: Phone, label: 'Phone Number', value: employee?.phone || '—' },
+    { icon: MapPin, label: 'Address', value: employee?.address || '—' },
+    { icon: Calendar, label: 'Date of Birth', value: employee?.dob || '—' },
+    { icon: Flag, label: 'Nationality', value: employee?.nationality || '—' },
+    { icon: Heart, label: 'Gender', value: employee?.gender || '—' },
+    { icon: Briefcase, label: 'Joining Date', value: employee?.joiningDate || '—' },
   ];
 
   return (
