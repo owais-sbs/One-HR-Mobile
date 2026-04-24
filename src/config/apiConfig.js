@@ -143,6 +143,22 @@ export const API_ENDPOINTS = {
     LIST: '/super-admins',
     CREATE: '/super-admins',
   },
+  LEAVE: {
+    REQUEST: '/leave/request',
+    MY_LEAVES: (employeeId) => `/leave/my-leaves?employeeId=${employeeId}`,
+    MY_LEAVES_BY_STATUS: (employeeId, status) => `/leave/my-leaves/status?employeeId=${employeeId}&status=${status}`,
+    TEAM_LEAVES: (supervisorId) => `/leave/team-leaves?supervisorId=${supervisorId}`,
+    TEAM_LEAVES_BY_STATUS: (supervisorId, status) => `/leave/team-leaves/status?supervisorId=${supervisorId}&status=${status}`,
+    COMPANY_LEAVES: (companyId) => `/leave/company-leaves?companyId=${companyId}`,
+    COMPANY_LEAVES_BY_STATUS: (companyId, status) => `/leave/company-leaves/status?companyId=${companyId}&status=${status}`,
+    APPROVE: (id) => `/leave/${id}/approve`,
+    REJECT: (id) => `/leave/${id}/reject`,
+    BALANCES: (employeeId) => `/leave/balances?employeeId=${employeeId}`,
+    BY_ID: (id) => `/leave/${id}`,
+  },
+  LEAVE_TYPES: {
+    LIST: '/leave-type',
+  },
 };
 
 export const STORAGE_KEYS = {

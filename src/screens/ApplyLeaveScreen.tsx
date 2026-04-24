@@ -1,34 +1,36 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   View,
   ScrollView,
   Pressable,
+  Alert,
+  ActivityIndicator,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import {
   ChevronLeft,
   ChevronRight,
   Calendar,
   Clock,
-  Check
+  Check,
+  AlertTriangle,
+  Info,
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
+import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
+import apiClient from '../api/apiClient';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'
-];
-
-const LEAVE_TYPES = [
-  { id: 'annual', label: 'Annual Leave', color: colors.secondary, icon: '🏖️' },
-  { id: 'sick', label: 'Sick Leave', color: colors.success, icon: '🏥' },
-  { id: 'casual', label: 'Casual Leave', color: colors.warning, icon: '🌴' },
-  { id: 'personal', label: 'Personal Leave', color: '#7c3aed', icon: '👤' },
 ];
 
 interface CalendarDay {
@@ -40,6 +42,23 @@ interface CalendarDay {
   isRangeStart: boolean;
   isRangeEnd: boolean;
   isInRange: boolean;
+}
+
+interface LeaveType {
+  id: number;
+  name: string;
+  totalDays: number;
+  color?: string;
+  icon?: string;
+}
+
+interface LeaveBalance {
+  id: number;
+  leaveTypeId: number;
+  totalAllocated: number;
+  used: number;
+  remaining: number;
+  extraUsed: number;
 }
 
 const getDaysInMonth = (year: number, month: number) => {
@@ -129,10 +148,53 @@ export default function ApplyLeaveScreen({ navigation }: any) {
     end: null,
   });
   const [selectingEnd, setSelectingEnd] = useState(false);
-  const [selectedLeaveType, setSelectedLeaveType] = useState<string | null>(null);
-  const [step, setStep] = useState<'date' | 'type'>('date');
+  const [selectedLeaveType, setSelectedLeaveType] = useState<number | null>(null);
+  const [step, setStep] = useState<'date' | 'type' | 'reason'>('date');
+  const [reason, setReason] = useState('');
+
+  const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
+  const [balances, setBalances] = useState<LeaveBalance[]>([]);
+  const [employee, setEmployee] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const calendarDays = generateCalendarDays(currentYear, currentMonth, selectedRange);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [])
+  );
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
+      if (cached) {
+        const emp = JSON.parse(cached);
+        setEmployee(emp);
+
+        // Fetch leave types
+        const typesRes = await apiClient.get(API_ENDPOINTS.LEAVE_TYPES.LIST);
+        if (typesRes.data?.isSuccess !== false) {
+          const types = typesRes.data?.data || [];
+          setLeaveTypes(types);
+        }
+
+        // Fetch balances
+        if (emp?.id) {
+          const balRes = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(emp.id));
+          if (balRes.data?.isSuccess !== false) {
+            setBalances(balRes.data?.data || []);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Load data error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const goToPrevMonth = () => {
     if (currentMonth === 0) {
@@ -175,8 +237,53 @@ export default function ApplyLeaveScreen({ navigation }: any) {
     return Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
   };
 
-  const handleSubmit = () => {
-    navigation.goBack();
+  const getBalanceForType = (typeId: number) => {
+    return balances.find(b => b.leaveTypeId === typeId);
+  };
+
+  const isExtraLeave = () => {
+    if (!selectedLeaveType) return false;
+    const balance = getBalanceForType(selectedLeaveType);
+    if (!balance) return false;
+    return balance.remaining < getSelectedDaysCount();
+  };
+
+  const handleSubmit = async () => {
+    if (!employee?.id || !selectedLeaveType || !selectedRange.start || !selectedRange.end) {
+      Alert.alert('Error', 'Please fill in all required fields');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const payload = {
+        employeeId: employee.id,
+        leaveTypeId: selectedLeaveType,
+        startDate: selectedRange.start.toISOString().split('T')[0],
+        endDate: selectedRange.end.toISOString().split('T')[0],
+        leaveDays: getSelectedDaysCount(),
+        supervisorId: employee.reportingManagerId,
+        reason: reason.trim(),
+        companyId: employee.companyId,
+      };
+
+      const response = await apiClient.post(API_ENDPOINTS.LEAVE.REQUEST, payload);
+      if (response.data?.isSuccess === false) {
+        Alert.alert('Error', response.data?.error || 'Failed to submit leave request');
+        return;
+      }
+
+      Alert.alert(
+        'Success',
+        'Leave request submitted successfully',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    } catch (error: any) {
+      const msg = error?.response?.data?.error || error?.message || 'Failed to submit leave request';
+      Alert.alert('Error', msg);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const renderCalendar = () => (
@@ -261,83 +368,164 @@ export default function ApplyLeaveScreen({ navigation }: any) {
       <Text variant="semibold" size={15} color={colors.text.primary} style={styles.sectionLabel}>
         Leave Type
       </Text>
-      {LEAVE_TYPES.map(type => (
-        <Pressable
-          key={type.id}
-          onPress={() => setSelectedLeaveType(type.id)}
-          style={[
-            styles.leaveTypeItem,
-            selectedLeaveType === type.id && styles.leaveTypeItemSelected,
-          ]}
-        >
-          <View style={styles.leaveTypeLeft}>
-            <Text style={styles.leaveTypeIcon}>{type.icon}</Text>
-            <Text variant="medium" size={14} color={colors.text.primary}>
-              {type.label}
-            </Text>
-          </View>
-          {selectedLeaveType === type.id && (
-            <View style={[styles.checkCircle, { backgroundColor: type.color }]}>
-              <Check size={14} color="#FFFFFF" strokeWidth={3} />
+      {leaveTypes.length === 0 && (
+        <View style={styles.emptyState}>
+          <Text variant="regular" size={13} color={colors.text.muted}>No leave types available</Text>
+        </View>
+      )}
+      {leaveTypes.map(type => {
+        const balance = getBalanceForType(type.id);
+        const isSelected = selectedLeaveType === type.id;
+        const typeColor = type.color || colors.secondary;
+        return (
+          <Pressable
+            key={type.id}
+            onPress={() => setSelectedLeaveType(type.id)}
+            style={[
+              styles.leaveTypeItem,
+              isSelected && styles.leaveTypeItemSelected,
+            ]}
+          >
+            <View style={styles.leaveTypeLeft}>
+              <Text style={styles.leaveTypeIcon}>{type.icon || '📋'}</Text>
+              <View>
+                <Text variant="medium" size={14} color={colors.text.primary}>
+                  {type.name}
+                </Text>
+                {balance && (
+                  <Text variant="regular" size={11} color={colors.text.muted}>
+                    {balance.remaining} of {balance.totalAllocated} days left
+                  </Text>
+                )}
+              </View>
             </View>
-          )}
-        </Pressable>
-      ))}
+            {isSelected && (
+              <View style={[styles.checkCircle, { backgroundColor: typeColor }]}>
+                <Check size={14} color="#FFFFFF" strokeWidth={3} />
+              </View>
+            )}
+          </Pressable>
+        );
+      })}
+
+      {isExtraLeave() && (
+        <View style={styles.extraWarning}>
+          <AlertTriangle size={16} color={colors.error} />
+          <Text variant="medium" size={12} color={colors.error} style={styles.extraWarningText}>
+            This will be marked as extra leave (insufficient balance)
+          </Text>
+        </View>
+      )}
     </View>
   );
+
+  const renderReasonInput = () => (
+    <View style={styles.reasonContainer}>
+      <Text variant="semibold" size={15} color={colors.text.primary} style={styles.sectionLabel}>
+        Reason for Leave
+      </Text>
+      <TextInput
+        style={styles.reasonInput}
+        placeholder="Enter your reason..."
+        placeholderTextColor={colors.text.muted}
+        value={reason}
+        onChangeText={setReason}
+        multiline
+        numberOfLines={4}
+        textAlignVertical="top"
+      />
+    </View>
+  );
+
+  const getStepTitle = () => {
+    if (step === 'date') return 'Apply Leave';
+    if (step === 'type') return 'Select Leave Type';
+    return 'Add Reason';
+  };
+
+  const canProceed = () => {
+    if (step === 'date') return !!selectedRange.end;
+    if (step === 'type') return !!selectedLeaveType;
+    return reason.trim().length > 0;
+  };
+
+  const handleNext = () => {
+    if (step === 'date') setStep('type');
+    else if (step === 'type') setStep('reason');
+  };
+
+  const handleBack = () => {
+    if (step === 'reason') setStep('type');
+    else if (step === 'type') {
+      setSelectedLeaveType(null);
+      setStep('date');
+    } else {
+      navigation.goBack();
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScreenHeader
-        title="Apply Leave"
-        onBack={() => {
-          if (step === 'type' && selectedRange.end) {
-            setStep('date');
-          } else {
-            navigation.goBack();
-          }
-        }}
+        title={getStepTitle()}
+        onBack={handleBack}
       />
 
       <View style={styles.stepIndicator}>
         <View style={[styles.stepDot, step === 'date' && styles.stepDotActive]} />
-        <View style={[styles.stepLine, selectedRange.end && styles.stepLineActive]} />
-        <View style={[styles.stepDot, step === 'type' && styles.stepDotActive, selectedRange.end && styles.stepDotActive]} />
+        <View style={[styles.stepLine, step !== 'date' && styles.stepLineActive]} />
+        <View style={[styles.stepDot, step === 'type' && styles.stepDotActive, step !== 'date' && styles.stepDotActive]} />
+        <View style={[styles.stepLine, step === 'reason' && styles.stepLineActive]} />
+        <View style={[styles.stepDot, step === 'reason' && styles.stepDotActive]} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {step === 'date' ? renderCalendar() : renderLeaveTypeSelection()}
-
-        <View style={styles.summaryCard}>
-          <Text variant="semibold" size={13} color={colors.text.muted} style={styles.summaryTitle}>
-            SUMMARY
-          </Text>
-          <View style={styles.summaryRow}>
-            <Text variant="regular" size={13} color={colors.text.secondary}>Duration</Text>
-            <Text variant="semibold" size={13} color={colors.text.primary}>
-              {selectedRange.start && selectedRange.end
-                ? `${getSelectedDaysCount()} day${getSelectedDaysCount() > 1 ? 's' : ''}`
-                : '-'}
-            </Text>
-          </View>
-          <View style={styles.summaryRow}>
-            <Text variant="regular" size={13} color={colors.text.secondary}>Type</Text>
-            <Text variant="semibold" size={13} color={colors.text.primary}>
-              {selectedLeaveType
-                ? LEAVE_TYPES.find(t => t.id === selectedLeaveType)?.label
-                : '-'}
-            </Text>
-          </View>
+      {loading ? (
+        <View style={styles.loaderContainer}>
+          <ActivityIndicator size="large" color={colors.secondary} />
         </View>
-      </ScrollView>
+      ) : (
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {step === 'date' && renderCalendar()}
+          {step === 'type' && renderLeaveTypeSelection()}
+          {step === 'reason' && renderReasonInput()}
+
+          <View style={styles.summaryCard}>
+            <Text variant="semibold" size={13} color={colors.text.muted} style={styles.summaryTitle}>
+              SUMMARY
+            </Text>
+            <View style={styles.summaryRow}>
+              <Text variant="regular" size={13} color={colors.text.secondary}>Duration</Text>
+              <Text variant="semibold" size={13} color={colors.text.primary}>
+                {selectedRange.start && selectedRange.end
+                  ? `${getSelectedDaysCount()} day${getSelectedDaysCount() > 1 ? 's' : ''}`
+                  : '-'}
+              </Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text variant="regular" size={13} color={colors.text.secondary}>Type</Text>
+              <Text variant="semibold" size={13} color={colors.text.primary}>
+                {selectedLeaveType
+                  ? leaveTypes.find(t => t.id === selectedLeaveType)?.name
+                  : '-'}
+              </Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text variant="regular" size={13} color={colors.text.secondary}>Status</Text>
+              <Text variant="semibold" size={13} color={isExtraLeave() ? colors.error : colors.success}>
+                {isExtraLeave() ? 'Extra Leave' : 'Regular Leave'}
+              </Text>
+            </View>
+          </View>
+        </ScrollView>
+      )}
 
       <View style={styles.footer}>
         <Button
-          title={step === 'date' ? (selectedRange.end ? 'Next' : 'Select Dates') : 'Submit Request'}
+          title={step === 'reason' ? (submitting ? 'Submitting...' : 'Submit Request') : 'Next'}
           variant="secondary"
           size="md"
-          onPress={step === 'date' ? () => selectedRange.end && setStep('type') : handleSubmit}
-          disabled={step === 'date' ? !selectedRange.end : !selectedLeaveType}
+          onPress={step === 'reason' ? handleSubmit : handleNext}
+          disabled={!canProceed() || submitting}
           style={styles.submitButton}
         />
       </View>
@@ -353,6 +541,11 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 16,
     paddingBottom: 100,
+  },
+  loaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   stepIndicator: {
     flexDirection: 'row',
@@ -500,6 +693,39 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  emptyState: {
+    paddingVertical: 24,
+    alignItems: 'center',
+  },
+  extraWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.error + '10',
+    padding: 12,
+    borderRadius: 12,
+    marginTop: 8,
+    gap: 8,
+  },
+  extraWarningText: {
+    flex: 1,
+  },
+  reasonContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+  },
+  reasonInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 14,
+    padding: 12,
+    fontSize: 14,
+    fontFamily: 'Poppins_400Regular',
+    color: colors.text.primary,
+    backgroundColor: '#FAFAFA',
+    minHeight: 100,
   },
   summaryCard: {
     backgroundColor: '#FFFFFF',

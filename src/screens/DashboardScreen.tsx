@@ -18,7 +18,9 @@ import {
   LogOut,
   TrendingUp,
   UserCheck,
-  Clock
+  Clock,
+  FileText,
+  Users,
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { StatCard } from '../components/ui/StatCard';
@@ -75,6 +77,9 @@ export default function DashboardScreen({ navigation }: any) {
   const [workingHours, setWorkingHours] = useState<any>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
+  const [pendingLeavesCount, setPendingLeavesCount] = useState(0);
+  const [teamLeavesCount, setTeamLeavesCount] = useState(0);
 
   // Update current time every second
   useEffect(() => {
@@ -109,6 +114,16 @@ export default function DashboardScreen({ navigation }: any) {
         // Fetch working hours for company
         if (emp?.companyId) {
           await fetchWorkingHours(emp.companyId);
+        }
+
+        // Fetch leave balances
+        if (emp?.id) {
+          await fetchLeaveBalances(emp.id);
+        }
+
+        // Fetch pending team leaves count if manager
+        if (emp?.id && emp?.reportingManagerId) {
+          await fetchTeamLeavesCount(emp.id);
         }
       }
     } catch (error) {
@@ -147,6 +162,30 @@ export default function DashboardScreen({ navigation }: any) {
     } catch (error) {
       console.error('Fetch working hours error:', error);
       setWorkingHours(null);
+    }
+  };
+
+  const fetchLeaveBalances = async (employeeId: number) => {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(employeeId));
+      if (response.data?.isSuccess !== false) {
+        const balances = response.data?.data || [];
+        setLeaveBalances(balances);
+      }
+    } catch (error) {
+      console.error('Fetch leave balances error:', error);
+    }
+  };
+
+  const fetchTeamLeavesCount = async (supervisorId: number) => {
+    try {
+      const response = await apiClient.get(API_ENDPOINTS.LEAVE.TEAM_LEAVES_BY_STATUS(supervisorId, 'PENDING'));
+      if (response.data?.isSuccess !== false) {
+        const leaves = response.data?.data || [];
+        setTeamLeavesCount(leaves.length);
+      }
+    } catch (error) {
+      console.error('Fetch team leaves error:', error);
     }
   };
 
@@ -241,7 +280,7 @@ export default function DashboardScreen({ navigation }: any) {
     hour12: true
   });
 
-  const leaveBalances = [
+  const defaultBalances = [
     { type: 'Annual Leave', left: 8, total: 12, color: colors.secondary },
     { type: 'Sick Leave', left: 8, total: 10, color: colors.success },
     { type: 'Casual Leave', left: 4, total: 5, color: colors.warning },
@@ -415,17 +454,79 @@ export default function DashboardScreen({ navigation }: any) {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.horizontalScroll}
           >
-            {leaveBalances.map((leave, index) => (
+            {(leaveBalances.length > 0 ? leaveBalances.map((b: any) => ({
+              type: b.leaveTypeName || 'Leave',
+              left: b.remaining || 0,
+              total: b.totalAllocated || 0,
+              color: colors.secondary,
+            })) : defaultBalances).map((leave: any, index: number, arr: any[]) => (
               <LeaveCard
                 key={index}
                 label={leave.type}
                 left={leave.left}
                 total={leave.total}
                 color={leave.color}
-                style={index < leaveBalances.length - 1 ? styles.leaveCardMargin : undefined}
+                style={index < arr.length - 1 ? styles.leaveCardMargin : undefined}
               />
             ))}
           </ScrollView>
+        </View>
+
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text variant="semibold" size={14} color={colors.text.primary}>
+              Leave Requests
+            </Text>
+            <Pressable onPress={() => navigation.navigate('LeaveHistory')}>
+              <Text variant="medium" size={11} color={colors.secondary}>
+                View All
+              </Text>
+            </Pressable>
+          </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.actionCard,
+              pressed && styles.actionCardPressed
+            ]}
+            onPress={() => navigation.navigate('LeaveHistory')}
+          >
+            <View style={[styles.actionIcon, { backgroundColor: colors.accent.blue }]}>
+              <FileText size={18} color={colors.secondary} />
+            </View>
+            <View style={styles.actionContent}>
+              <Text variant="semibold" size={13} color={colors.text.primary}>
+                My Leave History
+              </Text>
+              <Text variant="regular" size={11} color={colors.text.secondary}>
+                View all your leave requests
+              </Text>
+            </View>
+            <ChevronRight size={16} color={colors.text.muted} />
+          </Pressable>
+
+          {employee?.reportingManagerId && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.actionCard,
+                pressed && styles.actionCardPressed,
+                { marginTop: 8 }
+              ]}
+              onPress={() => navigation.navigate('TeamLeaves')}
+            >
+              <View style={[styles.actionIcon, { backgroundColor: colors.success + '15' }]}>
+                <Users size={18} color={colors.success} />
+              </View>
+              <View style={styles.actionContent}>
+                <Text variant="semibold" size={13} color={colors.text.primary}>
+                  Team Leave Requests
+                </Text>
+                <Text variant="regular" size={11} color={colors.text.secondary}>
+                  {teamLeavesCount > 0 ? `${teamLeavesCount} pending approval${teamLeavesCount > 1 ? 's' : ''}` : 'No pending approvals'}
+                </Text>
+              </View>
+              <ChevronRight size={16} color={colors.text.muted} />
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.section}>
@@ -615,6 +716,29 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   itemContent: {
+    flex: 1,
+  },
+  actionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#EEEEEE',
+  },
+  actionCardPressed: {
+    backgroundColor: '#F8F8F8',
+  },
+  actionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  actionContent: {
     flex: 1,
   },
 });

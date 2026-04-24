@@ -27,6 +27,8 @@ import CompanyDetailsScreen from './src/screens/CompanyDetailsScreen';
 import SecurityScreen from './src/screens/SecurityScreen';
 import NotificationScreen from './src/screens/NotificationScreen';
 import ApplyLeaveScreen from './src/screens/ApplyLeaveScreen';
+import LeaveHistoryScreen from './src/screens/LeaveHistoryScreen';
+import TeamLeavesScreen from './src/screens/TeamLeavesScreen';
 import { colors } from './src/theme/colors';
 import { STORAGE_KEYS } from './src/config/apiConfig';
 
@@ -44,6 +46,8 @@ function DashboardStackScreen() {
       <DashboardStack.Screen name="DashboardMain" component={DashboardScreen} />
       <DashboardStack.Screen name="HolidayList" component={HolidayListScreen} />
       <DashboardStack.Screen name="ApplyLeave" component={ApplyLeaveScreen} />
+      <DashboardStack.Screen name="LeaveHistory" component={LeaveHistoryScreen} />
+      <DashboardStack.Screen name="TeamLeaves" component={TeamLeavesScreen} />
     </DashboardStack.Navigator>
   );
 }
