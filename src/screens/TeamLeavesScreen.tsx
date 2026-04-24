@@ -29,6 +29,7 @@ import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
 import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 type LeaveStatus = 'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -88,7 +89,7 @@ export default function TeamLeavesScreen({ navigation }: any) {
     try {
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
       if (!cached) return;
-      const emp = JSON.parse(cached);
+      const emp = normalizeEmployeeData(JSON.parse(cached));
       setEmployee(emp);
 
       if (emp?.id) {

@@ -26,6 +26,7 @@ import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
 import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = [
@@ -171,11 +172,15 @@ export default function ApplyLeaveScreen({ navigation }: any) {
     try {
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
       if (cached) {
-        const emp = JSON.parse(cached);
+        const emp = normalizeEmployeeData(JSON.parse(cached));
         setEmployee(emp);
 
-        // Fetch leave types
-        const typesRes = await apiClient.get(API_ENDPOINTS.LEAVE_TYPES.LIST);
+        // Fetch company-specific leave types
+        const companyId = emp?.companyId;
+        const typesUrl = companyId
+          ? API_ENDPOINTS.LEAVE_TYPES.BY_COMPANY(companyId)
+          : API_ENDPOINTS.LEAVE_TYPES.LIST;
+        const typesRes = await apiClient.get(typesUrl);
         if (typesRes.data?.isSuccess !== false) {
           const types = typesRes.data?.data || [];
           setLeaveTypes(types);

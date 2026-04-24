@@ -158,6 +158,7 @@ export const API_ENDPOINTS = {
   },
   LEAVE_TYPES: {
     LIST: '/leave-type',
+    BY_COMPANY: (companyId) => `/leave-type/company/${companyId}`,
   },
 };
 

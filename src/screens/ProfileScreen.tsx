@@ -22,6 +22,7 @@ import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = true, destructive = false }: any) => (
   <Pressable
@@ -88,12 +89,13 @@ export default function ProfileScreen({ navigation }: any) {
       const parsedRoles = rolesJson[1] ? JSON.parse(rolesJson[1]) : [];
       setRoles(parsedRoles);
 
-      let employeeData = cachedEmployee[1] ? JSON.parse(cachedEmployee[1]) : null;
+      let employeeData = cachedEmployee[1] ? normalizeEmployeeData(JSON.parse(cachedEmployee[1])) : null;
 
       // Always fetch fresh data from the API
       const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.ME);
-      if (response.data) {
-        employeeData = response.data;
+      const freshEmployee = normalizeEmployeeData(response.data);
+      if (freshEmployee) {
+        employeeData = freshEmployee;
         await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(employeeData));
       }
 

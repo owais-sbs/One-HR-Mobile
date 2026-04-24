@@ -30,6 +30,7 @@ import { CustomBarChart } from '../components/ui/CustomBarChart';
 import { CustomPieChart } from '../components/ui/CustomPieChart';
 import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 function getInitials(firstName?: string, lastName?: string) {
   const f = firstName?.charAt(0) || '';
@@ -105,7 +106,7 @@ export default function DashboardScreen({ navigation }: any) {
     try {
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
       if (cached) {
-        const emp = JSON.parse(cached);
+        const emp = normalizeEmployeeData(JSON.parse(cached));
         setEmployee(emp);
 
         // Fetch today's attendance

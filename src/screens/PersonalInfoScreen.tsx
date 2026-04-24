@@ -8,6 +8,7 @@ import { User, Mail, Phone, MapPin, Briefcase, Calendar, Flag, Heart } from 'luc
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { STORAGE_KEYS } from '../config/apiConfig';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 export default function PersonalInfoScreen({ navigation }: any) {
   const [employee, setEmployee] = useState<any>(null);
@@ -16,7 +17,7 @@ export default function PersonalInfoScreen({ navigation }: any) {
     try {
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
       if (cached) {
-        setEmployee(JSON.parse(cached));
+        setEmployee(normalizeEmployeeData(JSON.parse(cached)));
       }
     } catch (error) {
       console.error('PersonalInfo load error:', error);

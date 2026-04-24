@@ -12,6 +12,7 @@ import { CustomLineChart } from '../components/ui/CustomLineChart';
 import { CustomRadarChart } from '../components/ui/CustomRadarChart';
 import apiClient from '../api/apiClient';
 import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 function unwrapApiData(response: any) {
   return response?.data?.data ?? response?.data ?? null;
@@ -50,7 +51,7 @@ export default function SalaryDetailsScreen() {
     try {
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
       if (cached) {
-        setEmployee(JSON.parse(cached));
+        setEmployee(normalizeEmployeeData(JSON.parse(cached)));
       }
     } catch (err) {
       console.error('SalaryDetails load employee error:', err);
