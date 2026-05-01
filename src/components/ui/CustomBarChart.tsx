@@ -75,8 +75,6 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
           maxValue={Math.max(12, maxVal + 2)}
           isAnimated
           animationDuration={800}
-          showGradient
-          gradientColor={barColor + '20'}
           height={140}
           width={chartWidth}
           initialSpacing={16}

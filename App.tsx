@@ -31,6 +31,7 @@ import LeaveHistoryScreen from './src/screens/LeaveHistoryScreen';
 import TeamLeavesScreen from './src/screens/TeamLeavesScreen';
 import { colors } from './src/theme/colors';
 import { STORAGE_KEYS } from './src/config/apiConfig';
+import { initializeNotificationSystem } from './src/services/notificationService';
 
 // Keep the splash screen visible while we fetch resources
 SplashScreen.preventAutoHideAsync();
@@ -134,6 +135,12 @@ export default function App() {
 
   useEffect(() => {
     checkAuth();
+  }, []);
+
+  useEffect(() => {
+    initializeNotificationSystem().catch((error) => {
+      console.error('Notification setup error:', error);
+    });
   }, []);
 
   const checkAuth = async () => {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, ViewStyle } from 'react-native';
+import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { Text } from './Typography';
 import { colors } from '../../theme/colors';
 import { ProgressBar } from './ProgressBar';
@@ -9,7 +9,7 @@ interface LeaveCardProps {
   left: number;
   total: number;
   color?: string;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
 
 export const LeaveCard: React.FC<LeaveCardProps> = ({

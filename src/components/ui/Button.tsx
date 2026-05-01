@@ -3,6 +3,7 @@ import {
   Pressable, 
   StyleSheet, 
   ViewStyle, 
+  StyleProp,
   ActivityIndicator,
   View
 } from 'react-native';
@@ -17,7 +18,7 @@ interface ButtonProps {
   loading?: boolean;
   disabled?: boolean;
   icon?: React.ReactNode;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
 }
 
 export const Button: React.FC<ButtonProps> = ({

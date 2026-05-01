@@ -164,6 +164,9 @@ export const API_ENDPOINTS = {
     LIST: "/leave-type",
     BY_COMPANY: (companyId) => `/leave-type/company/${companyId}`,
   },
+  HOLIDAYS: {
+    BY_COMPANY: (companyId) => `/holiday/${companyId}`,
+  },
 };
 
 export const STORAGE_KEYS = {
@@ -172,5 +175,21 @@ export const STORAGE_KEYS = {
   USER_DATA: "userData",
   USER_ROLES: "userRoles",
   EMPLOYEE_DATA: "employeeData",
+  COMPANY_DATA: "companyData",
+  ATTENDANCE_CACHE: "attendanceCache",
+  SALARY_STRUCTURE_CACHE: "salaryStructureCache",
+  SALARY_DATA_CACHE: "salaryDataCache",
+  SALARY_HISTORY_CACHE: "salaryHistoryCache",
+  PROFILE_CACHE: "profileCache",
+  DEPARTMENT_CACHE: "departmentCache",
   LOCATION_PERMISSION: "locationPermission",
+};
+
+export const CACHE_TTL = {
+  ATTENDANCE: 5 * 60 * 1000, // 5 minutes
+  SALARY_STRUCTURE: 30 * 60 * 1000, // 30 minutes
+  SALARY_DATA: 5 * 60 * 1000, // 5 minutes
+  SALARY_HISTORY: 10 * 60 * 1000, // 10 minutes
+  PROFILE: 10 * 60 * 1000, // 10 minutes
+  DEPARTMENT: 15 * 60 * 1000, // 15 minutes
 };

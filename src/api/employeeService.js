@@ -11,6 +11,11 @@ export const getEmployeeById = async (id) => {
   return response.data;
 };
 
+export const getCurrentEmployee = async () => {
+  const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.ME);
+  return response.data;
+};
+
 export const getEmployeesByDepartment = async (departmentId) => {
   const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.BY_DEPARTMENT(departmentId));
   return response.data;

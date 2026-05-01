@@ -18,6 +18,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, style }) => {
         return { bg: colors.accent.amber, text: colors.warning };
       case 'absent':
         return { bg: colors.accent.red, text: colors.error };
+      case 'working day':
+        return { bg: colors.accent.blue, text: colors.secondary };
       default:
         return { bg: colors.accent.blue, text: colors.secondary };
     }

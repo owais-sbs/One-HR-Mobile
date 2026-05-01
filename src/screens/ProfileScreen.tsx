@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, View, ScrollView, Pressable, Alert, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, ScrollView, Pressable, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -20,7 +20,7 @@ import {
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
-import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
+import { STORAGE_KEYS, API_ENDPOINTS, CACHE_TTL } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
 import { normalizeEmployeeData } from '../utils/employeeData';
 
@@ -77,47 +77,93 @@ export default function ProfileScreen({ navigation }: any) {
   const [department, setDepartment] = useState<string>('');
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const loadProfile = useCallback(async () => {
-    try {
+  const loadProfile = useCallback(async (forceRefresh = false) => {
+    if (forceRefresh) {
+      setRefreshing(true);
+      await AsyncStorage.removeItem(STORAGE_KEYS.PROFILE_CACHE);
+      await AsyncStorage.removeItem(STORAGE_KEYS.DEPARTMENT_CACHE);
+    } else {
       setLoading(true);
-      const [rolesJson, cachedEmployee] = await AsyncStorage.multiGet([
+    }
+    try {
+      const [rolesJson] = await AsyncStorage.multiGet([
         STORAGE_KEYS.USER_ROLES,
-        STORAGE_KEYS.EMPLOYEE_DATA,
       ]);
 
       const parsedRoles = rolesJson[1] ? JSON.parse(rolesJson[1]) : [];
       setRoles(parsedRoles);
 
-      let employeeData = cachedEmployee[1] ? normalizeEmployeeData(JSON.parse(cachedEmployee[1])) : null;
+      if (!forceRefresh) {
+        const cachedProfile = await AsyncStorage.getItem(STORAGE_KEYS.PROFILE_CACHE);
+        if (cachedProfile) {
+          const { data, timestamp } = JSON.parse(cachedProfile);
+          if (Date.now() - timestamp < CACHE_TTL.PROFILE) {
+            const employeeData = normalizeEmployeeData(data);
+            setEmployee(employeeData);
+            if (employeeData?.departmentId) {
+              const cachedDept = await AsyncStorage.getItem(STORAGE_KEYS.DEPARTMENT_CACHE);
+              if (cachedDept) {
+                const { data: deptData, timestamp: deptTs } = JSON.parse(cachedDept);
+                if (Date.now() - deptTs < CACHE_TTL.DEPARTMENT) {
+                  setDepartment(deptData);
+                }
+              }
+            }
+            setLoading(false);
+            setRefreshing(false);
+            return;
+          }
+        }
+      }
 
-      // Always fetch fresh data from the API
       const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.ME);
       const freshEmployee = normalizeEmployeeData(response.data);
       if (freshEmployee) {
-        employeeData = freshEmployee;
-        await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(employeeData));
-      }
+        setEmployee(freshEmployee);
+        await AsyncStorage.setItem(STORAGE_KEYS.PROFILE_CACHE, JSON.stringify({
+          data: freshEmployee,
+          timestamp: Date.now(),
+        }));
 
-      setEmployee(employeeData);
-
-      // Fetch department name if available
-      if (employeeData?.departmentId) {
-        try {
-          const deptResponse = await apiClient.get(API_ENDPOINTS.DEPARTMENTS.BY_ID(employeeData.departmentId));
-          if (deptResponse.data?.name) {
-            setDepartment(deptResponse.data.name);
+        if (freshEmployee.departmentId) {
+          const cachedDept = await AsyncStorage.getItem(STORAGE_KEYS.DEPARTMENT_CACHE);
+          let useCachedDept = false;
+          if (cachedDept) {
+            const { data: deptData, timestamp: deptTs } = JSON.parse(cachedDept);
+            if (Date.now() - deptTs < CACHE_TTL.DEPARTMENT) {
+              setDepartment(deptData);
+              useCachedDept = true;
+            }
           }
-        } catch (e) {
-          // ignore department fetch errors
+          if (!useCachedDept) {
+            try {
+              const deptResponse = await apiClient.get(API_ENDPOINTS.DEPARTMENTS.BY_ID(freshEmployee.departmentId));
+              if (deptResponse.data?.name) {
+                setDepartment(deptResponse.data.name);
+                await AsyncStorage.setItem(STORAGE_KEYS.DEPARTMENT_CACHE, JSON.stringify({
+                  data: deptResponse.data.name,
+                  timestamp: Date.now(),
+                }));
+              }
+            } catch (e) {
+              // ignore department fetch errors
+            }
+          }
         }
       }
     } catch (error) {
       console.error('Profile load error:', error);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
+
+  const onRefresh = useCallback(() => {
+    loadProfile(true);
+  }, [loadProfile]);
 
   useFocusEffect(
     useCallback(() => {
@@ -231,7 +277,18 @@ export default function ProfileScreen({ navigation }: any) {
           </Pressable>
         }
       />
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[colors.primary]}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <View style={styles.profileCard}>
           <View style={styles.avatarSection}>
             <View style={styles.avatar}>

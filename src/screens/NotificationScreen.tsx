@@ -1,36 +1,31 @@
-import React from 'react';
-import { StyleSheet, View, FlatList, Pressable } from 'react-native';
+import React, { useCallback, useMemo, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { Bell, Calendar, Clock, CheckCircle, AlertCircle } from 'lucide-react-native';
 import { colors } from '../theme/colors';
-import { Bell, Calendar, DollarSign, Clock, FileText, CheckCircle, AlertCircle } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { EmptyState } from '../components/ui/EmptyState';
+import {
+  loadNotificationCenter,
+  markAllNotificationsRead,
+  markNotificationRead,
+  refreshNotificationCenter,
+  type NotificationCategory,
+  type NotificationRecord,
+} from '../services/notificationService';
 
-interface Notification {
-  id: string;
-  title: string;
-  subtitle: string;
-  time: string;
-  icon: React.ComponentType<any>;
-  bgColor: string;
-  iconColor: string;
-  read: boolean;
-  category: 'salary' | 'leave' | 'attendance' | 'general' | 'document' | 'approval' | 'alert';
-}
+type NotificationItem = NotificationRecord;
 
-const getNotificationIcon = (category: Notification['category']) => {
+const getNotificationIcon = (category: NotificationCategory) => {
   switch (category) {
-    case 'salary':
-      return { icon: DollarSign, bgColor: '#ECFDF5', iconColor: '#16a34a' };
     case 'leave':
       return { icon: Calendar, bgColor: '#EFF6FF', iconColor: '#2563eb' };
     case 'attendance':
       return { icon: Clock, bgColor: '#FFFBEB', iconColor: '#d97706' };
     case 'approval':
       return { icon: CheckCircle, bgColor: '#F0FDF4', iconColor: '#16a34a' };
-    case 'document':
-      return { icon: FileText, bgColor: '#F5F3FF', iconColor: '#7c3aed' };
     case 'alert':
       return { icon: AlertCircle, bgColor: '#FEF2F2', iconColor: '#dc2626' };
     default:
@@ -38,65 +33,24 @@ const getNotificationIcon = (category: Notification['category']) => {
   }
 };
 
-const notifications: Notification[] = [
-  {
-    id: '1',
-    title: 'Salary Credited',
-    subtitle: 'Your salary for April 2026 has been processed',
-    time: '2h ago',
-    category: 'salary',
-    read: false,
-    ...getNotificationIcon('salary'),
-  },
-  {
-    id: '2',
-    title: 'Leave Approved',
-    subtitle: 'Your leave for Apr 25 has been approved',
-    time: '5h ago',
-    category: 'approval',
-    read: false,
-    ...getNotificationIcon('approval'),
-  },
-  {
-    id: '3',
-    title: 'Clock-in Reminder',
-    subtitle: "Don't forget to clock in for your morning shift",
-    time: '1d ago',
-    category: 'attendance',
-    read: true,
-    ...getNotificationIcon('attendance'),
-  },
-  {
-    id: '4',
-    title: 'Payslip Available',
-    subtitle: 'Your March 2026 payslip is ready to view',
-    time: '2d ago',
-    category: 'document',
-    read: true,
-    ...getNotificationIcon('document'),
-  },
-  {
-    id: '5',
-    title: 'New Policy Update',
-    subtitle: 'Updated attendance policy effective May 1',
-    time: '3d ago',
-    category: 'general',
-    read: true,
-    ...getNotificationIcon('general'),
-  },
-];
-
 const SectionHeader = ({ title }: { title: string }) => (
   <Text variant="medium" size={11} color={colors.text.muted} style={styles.sectionHeader}>
     {title}
   </Text>
 );
 
-const NotificationItem = ({ item }: { item: Notification }) => {
-  const IconComponent = item.icon;
+const NotificationItemRow = ({
+  item,
+  onPress,
+}: {
+  item: NotificationItem;
+  onPress: (id: string) => void;
+}) => {
+  const { icon: IconComponent, bgColor, iconColor } = getNotificationIcon(item.category);
 
   return (
     <Pressable
+      onPress={() => onPress(item.id)}
       style={({ pressed }) => [
         styles.notificationItem,
         !item.read && styles.unreadItem,
@@ -104,8 +58,8 @@ const NotificationItem = ({ item }: { item: Notification }) => {
       ]}
     >
       {!item.read && <View style={styles.unreadIndicator} />}
-      <View style={[styles.iconWrapper, { backgroundColor: item.bgColor }]}>
-        <IconComponent size={18} color={item.iconColor} strokeWidth={2} />
+      <View style={[styles.iconWrapper, { backgroundColor: bgColor }]}>
+        <IconComponent size={18} color={iconColor} strokeWidth={2} />
       </View>
       <View style={styles.contentWrapper}>
         <View style={styles.topRow}>
@@ -113,7 +67,7 @@ const NotificationItem = ({ item }: { item: Notification }) => {
             {item.title}
           </Text>
           <Text variant="regular" size={11} color={colors.text.muted}>
-            {item.time}
+            {item.timeLabel}
           </Text>
         </View>
         <Text variant="regular" size={13} color={colors.text.secondary} numberOfLines={2} style={styles.subtitle}>
@@ -125,38 +79,102 @@ const NotificationItem = ({ item }: { item: Notification }) => {
 };
 
 export default function NotificationScreen() {
-  const todayNotifications = notifications.filter(n => n.read === false);
-  const earlierNotifications = notifications.filter(n => n.read === true);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const data = [
-    ...(todayNotifications.length > 0 ? [{ id: 'header-new', type: 'header' as const, title: 'NEW' }, ...todayNotifications.map(n => ({ id: n.id, type: 'item' as const, ...n }))] : []),
-    ...(earlierNotifications.length > 0 ? [{ id: 'header-earlier', type: 'header' as const, title: 'EARLIER' }, ...earlierNotifications.map(n => ({ id: n.id, type: 'item' as const, ...n }))] : []),
-  ];
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const refreshed = await refreshNotificationCenter();
+      setNotifications(refreshed.length > 0 ? refreshed : await loadNotificationCenter());
+    } catch (error) {
+      console.error('Notification load error:', error);
+      setNotifications(await loadNotificationCenter());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
+
+  const groupedData = useMemo(() => {
+    const unread = notifications.filter((item) => !item.read);
+    const read = notifications.filter((item) => item.read);
+
+    return [
+      ...(unread.length > 0 ? [{ id: 'header-new', type: 'header' as const, title: 'NEW' }, ...unread.map((item) => ({ id: item.id, type: 'item' as const, ...item }))] : []),
+      ...(read.length > 0 ? [{ id: 'header-earlier', type: 'header' as const, title: 'EARLIER' }, ...read.map((item) => ({ id: item.id, type: 'item' as const, ...item }))] : []),
+    ];
+  }, [notifications]);
+
+  const handleMarkRead = async (id: string) => {
+    try {
+      const updated = await markNotificationRead(id);
+      setNotifications(updated);
+    } catch (error) {
+      console.error('Mark notification read error:', error);
+    }
+  };
+
+  const handleMarkAllRead = async () => {
+    try {
+      const updated = await markAllNotificationsRead();
+      setNotifications(updated);
+    } catch (error) {
+      console.error('Mark all notifications read error:', error);
+    }
+  };
 
   const renderItem = ({ item }: { item: any }) => {
     if (item.type === 'header') {
       return <SectionHeader title={item.title} />;
     }
-    return <NotificationItem item={item} />;
+    return <NotificationItemRow item={item} onPress={handleMarkRead} />;
   };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScreenHeader title="Notifications" />
-      <FlatList
-        data={data}
-        renderItem={renderItem}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <EmptyState
-            title="All caught up!"
-            message="You don't have any notifications at the moment."
-            icon={<Bell size={40} color={colors.text.muted} />}
-          />
-        }
-      />
+      <View style={styles.actionsRow}>
+        <Text variant="medium" size={12} color={colors.text.muted}>
+          Attendance reminders and leave updates
+        </Text>
+        <Pressable
+          onPress={handleMarkAllRead}
+          style={({ pressed }) => [
+            styles.markAllButton,
+            pressed && styles.markAllButtonPressed,
+          ]}
+        >
+          <Text variant="semibold" size={11} color={colors.secondary}>
+            Mark all read
+          </Text>
+        </Pressable>
+      </View>
+      {loading ? (
+        <View style={styles.loadingState}>
+          <ActivityIndicator color={colors.secondary} />
+        </View>
+      ) : (
+        <FlatList
+          data={groupedData}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <EmptyState
+              title="All caught up!"
+              message="You don't have any notifications at the moment."
+              icon={<Bell size={40} color={colors.text.muted} />}
+            />
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -166,9 +184,31 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 8,
+  },
+  markAllButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#EEF2FF',
+  },
+  markAllButtonPressed: {
+    opacity: 0.8,
+  },
+  loadingState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   listContent: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 4,
     paddingBottom: 40,
   },
   sectionHeader: {
@@ -235,3 +275,4 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
 });
+

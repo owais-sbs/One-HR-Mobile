@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, Pressable, ViewStyle } from 'react-native';
+import { View, StyleSheet, Pressable, StyleProp, ViewStyle } from 'react-native';
 import { Text } from './Typography';
 import { colors } from '../../theme/colors';
 
@@ -8,7 +8,7 @@ interface StatCardProps {
   value: string;
   icon?: React.ReactNode;
   onPress?: () => void;
-  style?: ViewStyle;
+  style?: StyleProp<ViewStyle>;
   color?: string;
   description?: string;
 }

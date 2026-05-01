@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { StyleSheet, View, ScrollView, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -11,7 +11,7 @@ import { Button } from '../components/ui/Button';
 import { CustomLineChart } from '../components/ui/CustomLineChart';
 import { CustomRadarChart } from '../components/ui/CustomRadarChart';
 import apiClient from '../api/apiClient';
-import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
+import { API_ENDPOINTS, STORAGE_KEYS, CACHE_TTL } from '../config/apiConfig';
 import { normalizeEmployeeData } from '../utils/employeeData';
 
 function unwrapApiData(response: any) {
@@ -45,6 +45,7 @@ export default function SalaryDetailsScreen() {
   const [salaryStructure, setSalaryStructure] = useState<any>(null);
   const [salaryHistory, setSalaryHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadEmployee = useCallback(async () => {
@@ -58,7 +59,7 @@ export default function SalaryDetailsScreen() {
     }
   }, []);
 
-  const fetchSalaryDetails = useCallback(async () => {
+  const fetchSalaryDetails = useCallback(async (forceRefresh = false) => {
     if (!employee) return;
 
     const employeeCandidates = [employee?.id, employee?.employeeId, employee?.employeeToken]
@@ -70,85 +71,245 @@ export default function SalaryDetailsScreen() {
       return;
     }
 
+    if (forceRefresh) {
+      setRefreshing(true);
+      await AsyncStorage.removeItem(`${STORAGE_KEYS.SALARY_DATA_CACHE}_${employeeCandidates[0]}`);
+      await AsyncStorage.removeItem(`${STORAGE_KEYS.SALARY_STRUCTURE_CACHE}_${employeeCandidates[0]}`);
+      await AsyncStorage.removeItem(`${STORAGE_KEYS.SALARY_HISTORY_CACHE}_${employeeCandidates[0]}`);
+    }
+
     try {
-      setLoading(true);
+      if (!forceRefresh) {
+        setLoading(true);
+      }
       setError(null);
 
       let salaryRecord: any = null;
       let resolvedEmployeeId: number | string | null = null;
       let lastSalaryError: any = null;
 
-      for (const candidate of employeeCandidates) {
-        try {
-          const salaryResponse = await apiClient.get(
-            API_ENDPOINTS.EMPLOYEE_SALARIES.BY_EMPLOYEE(candidate)
-          );
-          salaryRecord = unwrapApiData(salaryResponse);
-          resolvedEmployeeId = candidate;
-          break;
-        } catch (candidateError) {
-          lastSalaryError = candidateError;
+      const salaryCacheKey = `${STORAGE_KEYS.SALARY_DATA_CACHE}_${employeeCandidates[0]}`;
+      if (!forceRefresh) {
+        const cachedSalary = await AsyncStorage.getItem(salaryCacheKey);
+        if (cachedSalary) {
+          const { data, timestamp } = JSON.parse(cachedSalary);
+          if (Date.now() - timestamp < CACHE_TTL.SALARY_DATA) {
+            setSalaryData(data);
+            salaryRecord = data;
+            resolvedEmployeeId = employeeCandidates[0];
+          }
         }
       }
 
       if (!salaryRecord) {
-        throw lastSalaryError || new Error('Failed to load salary data');
-      }
+        for (const candidate of employeeCandidates) {
+          try {
+            const salaryResponse = await apiClient.get(
+              API_ENDPOINTS.EMPLOYEE_SALARIES.BY_EMPLOYEE(candidate)
+            );
+            salaryRecord = unwrapApiData(salaryResponse);
+            resolvedEmployeeId = candidate;
+            break;
+          } catch (candidateError) {
+            lastSalaryError = candidateError;
+          }
+        }
 
-      setSalaryData(salaryRecord);
+        if (!salaryRecord) {
+          throw lastSalaryError || new Error('Failed to load salary data');
+        }
+
+        setSalaryData(salaryRecord);
+        await AsyncStorage.setItem(salaryCacheKey, JSON.stringify({
+          data: salaryRecord,
+          timestamp: Date.now(),
+        }));
+      }
 
       const salaryStructureId = salaryRecord?.salaryStructureId || employee?.salaryStructureId;
       const companyId = salaryRecord?.companyId || employee?.companyId;
+      const structureCacheKey = `${STORAGE_KEYS.SALARY_STRUCTURE_CACHE}_${salaryStructureId || companyId}`;
 
-      if (salaryStructureId) {
-        try {
-          const structureResponse = await apiClient.get(
-            API_ENDPOINTS.SALARY_STRUCTURES.BY_ID(salaryStructureId)
-          );
-          setSalaryStructure(unwrapApiData(structureResponse));
-        } catch (structureError) {
-          console.error('SalaryDetails structure fetch error:', structureError);
-          setSalaryStructure(null);
-        }
-      } else if (companyId) {
-        try {
-          const structureResponse = await apiClient.get(
-            API_ENDPOINTS.SALARY_STRUCTURES.ACTIVE_BY_COMPANY(companyId)
-          );
-          const structureData = unwrapApiData(structureResponse);
-          setSalaryStructure(Array.isArray(structureData) ? structureData[0] || null : structureData);
-        } catch (structureError) {
-          console.error('SalaryDetails active structure fetch error:', structureError);
-          setSalaryStructure(null);
+      if (salaryStructureId || companyId) {
+        if (!forceRefresh) {
+          const cachedStructure = await AsyncStorage.getItem(structureCacheKey);
+          if (cachedStructure) {
+            const { data, timestamp } = JSON.parse(cachedStructure);
+            if (Date.now() - timestamp < CACHE_TTL.SALARY_STRUCTURE) {
+              setSalaryStructure(data);
+            } else {
+              try {
+                if (salaryStructureId) {
+                  const structureResponse = await apiClient.get(
+                    API_ENDPOINTS.SALARY_STRUCTURES.BY_ID(salaryStructureId)
+                  );
+                  const structureData = unwrapApiData(structureResponse);
+                  setSalaryStructure(structureData);
+                  await AsyncStorage.setItem(structureCacheKey, JSON.stringify({
+                    data: structureData,
+                    timestamp: Date.now(),
+                  }));
+                } else {
+                  const structureResponse = await apiClient.get(
+                    API_ENDPOINTS.SALARY_STRUCTURES.ACTIVE_BY_COMPANY(companyId)
+                  );
+                  const structureData = unwrapApiData(structureResponse);
+                  const finalStructure = Array.isArray(structureData) ? structureData[0] || null : structureData;
+                  setSalaryStructure(finalStructure);
+                  await AsyncStorage.setItem(structureCacheKey, JSON.stringify({
+                    data: finalStructure,
+                    timestamp: Date.now(),
+                  }));
+                }
+              } catch (structureError) {
+                console.error('SalaryDetails structure fetch error:', structureError);
+                setSalaryStructure(null);
+              }
+            }
+          } else {
+            try {
+              if (salaryStructureId) {
+                const structureResponse = await apiClient.get(
+                  API_ENDPOINTS.SALARY_STRUCTURES.BY_ID(salaryStructureId)
+                );
+                const structureData = unwrapApiData(structureResponse);
+                setSalaryStructure(structureData);
+                await AsyncStorage.setItem(structureCacheKey, JSON.stringify({
+                  data: structureData,
+                  timestamp: Date.now(),
+                }));
+              } else {
+                const structureResponse = await apiClient.get(
+                  API_ENDPOINTS.SALARY_STRUCTURES.ACTIVE_BY_COMPANY(companyId)
+                );
+                const structureData = unwrapApiData(structureResponse);
+                const finalStructure = Array.isArray(structureData) ? structureData[0] || null : structureData;
+                setSalaryStructure(finalStructure);
+                await AsyncStorage.setItem(structureCacheKey, JSON.stringify({
+                  data: finalStructure,
+                  timestamp: Date.now(),
+                }));
+              }
+            } catch (structureError) {
+              console.error('SalaryDetails structure fetch error:', structureError);
+              setSalaryStructure(null);
+            }
+          }
+        } else {
+          try {
+            if (salaryStructureId) {
+              const structureResponse = await apiClient.get(
+                API_ENDPOINTS.SALARY_STRUCTURES.BY_ID(salaryStructureId)
+              );
+              const structureData = unwrapApiData(structureResponse);
+              setSalaryStructure(structureData);
+              await AsyncStorage.setItem(structureCacheKey, JSON.stringify({
+                data: structureData,
+                timestamp: Date.now(),
+              }));
+            } else {
+              const structureResponse = await apiClient.get(
+                API_ENDPOINTS.SALARY_STRUCTURES.ACTIVE_BY_COMPANY(companyId)
+              );
+              const structureData = unwrapApiData(structureResponse);
+              const finalStructure = Array.isArray(structureData) ? structureData[0] || null : structureData;
+              setSalaryStructure(finalStructure);
+              await AsyncStorage.setItem(structureCacheKey, JSON.stringify({
+                data: finalStructure,
+                timestamp: Date.now(),
+              }));
+            }
+          } catch (structureError) {
+            console.error('SalaryDetails structure fetch error:', structureError);
+            setSalaryStructure(null);
+          }
         }
       } else {
         setSalaryStructure(null);
       }
 
-      // Fetch salary history / revisions
-      try {
-        const historyResponse = await apiClient.get(
-          API_ENDPOINTS.SALARY_REVISIONS.BY_EMPLOYEE(resolvedEmployeeId || employeeCandidates[0])
-        );
-        const historyData = unwrapApiData(historyResponse);
-        if (Array.isArray(historyData)) {
-          setSalaryHistory(historyData);
-        } else if (historyData && Array.isArray(historyData.content)) {
-          setSalaryHistory(historyData.content);
+      const historyCacheKey = `${STORAGE_KEYS.SALARY_HISTORY_CACHE}_${resolvedEmployeeId || employeeCandidates[0]}`;
+      if (!forceRefresh) {
+        const cachedHistory = await AsyncStorage.getItem(historyCacheKey);
+        if (cachedHistory) {
+          const { data, timestamp } = JSON.parse(cachedHistory);
+          if (Date.now() - timestamp < CACHE_TTL.SALARY_HISTORY) {
+            setSalaryHistory(data);
+          } else {
+            try {
+              const historyResponse = await apiClient.get(
+                API_ENDPOINTS.SALARY_REVISIONS.BY_EMPLOYEE(resolvedEmployeeId || employeeCandidates[0])
+              );
+              const historyData = unwrapApiData(historyResponse);
+              let historyList: any[] = [];
+              if (Array.isArray(historyData)) {
+                historyList = historyData;
+              } else if (historyData && Array.isArray(historyData.content)) {
+                historyList = historyData.content;
+              }
+              setSalaryHistory(historyList);
+              await AsyncStorage.setItem(historyCacheKey, JSON.stringify({
+                data: historyList,
+                timestamp: Date.now(),
+              }));
+            } catch {
+              setSalaryHistory([]);
+            }
+          }
         } else {
+          try {
+            const historyResponse = await apiClient.get(
+              API_ENDPOINTS.SALARY_REVISIONS.BY_EMPLOYEE(resolvedEmployeeId || employeeCandidates[0])
+            );
+            const historyData = unwrapApiData(historyResponse);
+            let historyList: any[] = [];
+            if (Array.isArray(historyData)) {
+              historyList = historyData;
+            } else if (historyData && Array.isArray(historyData.content)) {
+              historyList = historyData.content;
+            }
+            setSalaryHistory(historyList);
+            await AsyncStorage.setItem(historyCacheKey, JSON.stringify({
+              data: historyList,
+              timestamp: Date.now(),
+            }));
+          } catch {
+            setSalaryHistory([]);
+          }
+        }
+      } else {
+        try {
+          const historyResponse = await apiClient.get(
+            API_ENDPOINTS.SALARY_REVISIONS.BY_EMPLOYEE(resolvedEmployeeId || employeeCandidates[0])
+          );
+          const historyData = unwrapApiData(historyResponse);
+          let historyList: any[] = [];
+          if (Array.isArray(historyData)) {
+            historyList = historyData;
+          } else if (historyData && Array.isArray(historyData.content)) {
+            historyList = historyData.content;
+          }
+          setSalaryHistory(historyList);
+          await AsyncStorage.setItem(historyCacheKey, JSON.stringify({
+            data: historyList,
+            timestamp: Date.now(),
+          }));
+        } catch {
           setSalaryHistory([]);
         }
-      } catch {
-        // If history fetch fails, just set empty history so chart is hidden
-        setSalaryHistory([]);
       }
     } catch (err: any) {
       console.error('SalaryDetails fetch error:', err);
       setError(err?.response?.data?.message || 'Failed to load salary details');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [employee]);
+
+  const onRefresh = useCallback(() => {
+    fetchSalaryDetails(true);
+  }, [fetchSalaryDetails]);
 
   useFocusEffect(
     useCallback(() => {
@@ -289,7 +450,18 @@ export default function SalaryDetailsScreen() {
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScreenHeader title="Salary Details" />
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[colors.primary]}
+            tintColor={colors.primary}
+          />
+        }
+      >
         <View style={styles.mainCard}>
           <Text variant="medium" size={12} color="rgba(255,255,255,0.6)" style={styles.cardMonth}>
             {currentMonthLabel}
