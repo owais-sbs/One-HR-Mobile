@@ -6,6 +6,8 @@ import { NativeModules, Platform } from "react-native";
 // - When Expo serves the app from a LAN host, we reuse that host and swap in
 //   the backend port so everyone on the same network can hit the same server.
 // - For emulators/simulators, we fall back to loopback-friendly hosts.
+// - If no reachable local/LAN backend can be inferred, we fall back to the
+//   local backend defaults for testing.
 // - You can always override this with EXPO_PUBLIC_API_BASE_URL.
 const ANDROID_EMULATOR_BASE_URL = "http://10.0.2.2:8080/api";
 const IOS_SIMULATOR_BASE_URL = "http://localhost:8080/api";
@@ -44,7 +46,9 @@ function getHostFromUrl(urlLike) {
 function getPackagerHost() {
   const hostCandidates = [
     Constants.expoConfig?.hostUri,
+    Constants.manifest2?.extra?.expoClient?.hostUri,
     Constants.expoGoConfig?.debuggerHost,
+    Constants.linkingUri,
     NativeModules?.SourceCode?.scriptURL,
   ];
 
@@ -91,7 +95,7 @@ if (__DEV__) {
 }
 
 export const API_CONFIG = {
-  BASE_URL: __DEV__ ? DEV_BASE_URL : "https://api.onehr.com/api",
+  BASE_URL: __DEV__ ? DEV_BASE_URL : IOS_SIMULATOR_BASE_URL,
   TIMEOUT: 30000,
   HEADERS: {
     "Content-Type": "application/json",

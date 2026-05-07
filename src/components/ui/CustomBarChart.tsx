@@ -35,6 +35,14 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
   }));
 
   const maxVal = Math.max(...data.map(d => d.value));
+  const noOfSections = 4;
+  // GiftedCharts expects: maxValue = noOfSections * stepValue
+  // Use a stable scale so bars don't disappear due to mismatched props.
+  const computedMaxValue = Math.max(
+    12,
+    Math.ceil((Number.isFinite(maxVal) ? maxVal : 0) + 2)
+  );
+  const stepValue = computedMaxValue / noOfSections;
   // (12*2 from dashboard padding + 18*2 from chart container padding) = 60
   const chartWidth = screenWidth - 64; 
   
@@ -58,11 +66,13 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
       <View style={styles.chartArea}>
         <BarChart
           data={chartData}
+          frontColor={barColor}
           barWidth={32}
           spacing={28}
           roundedTop
           roundedBottom
           barBorderRadius={8}
+          minHeight={3}
           hideRules={false}
           rulesType="dashed"
           rulesColor={colors.border}
@@ -71,8 +81,11 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
           xAxisThickness={0}
           yAxisTextStyle={{ color: colors.text.muted, fontSize: 10 }}
           xAxisLabelTextStyle={{ color: colors.text.secondary, fontSize: 10, fontWeight: '600' }}
-          noOfSections={4}
-          maxValue={Math.max(12, maxVal + 2)}
+          noOfSections={noOfSections}
+          maxValue={computedMaxValue}
+          stepValue={stepValue}
+          showFractionalValues
+          roundToDigits={1}
           isAnimated
           animationDuration={800}
           height={140}

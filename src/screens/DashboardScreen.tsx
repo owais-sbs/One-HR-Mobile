@@ -565,7 +565,7 @@ export default function DashboardScreen({ navigation }: any) {
       })
     : leaveBalances.length > 0
       ? leaveBalances.map((balance, index) => ({
-          label: balance.leaveTypeName || `Leave ${balance.leaveTypeId}`,
+          label: balance.leaveTypeName || 'Leave',
           value: Math.max(0, balance.remaining ?? balance.totalAllocated ?? 0),
           color: [colors.secondary, colors.success, colors.warning][index % 3],
         }))
@@ -591,7 +591,7 @@ export default function DashboardScreen({ navigation }: any) {
       ? leaveBalances.map((balance, index) => {
           const companyType = companyLeaveTypeMap.get(Number(balance.leaveTypeId));
           return {
-            type: companyType?.name || balance.leaveTypeName || `Leave ${balance.leaveTypeId}`,
+            type: companyType?.name || balance.leaveTypeName || 'Leave',
             left: balance.remaining ?? companyType?.totalDays ?? balance.totalAllocated ?? 0,
             total: balance.totalAllocated ?? companyType?.totalDays ?? 0,
             color: companyType?.color || [colors.secondary, colors.success, colors.warning][index % 3],
