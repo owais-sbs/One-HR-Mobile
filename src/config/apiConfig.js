@@ -1,3 +1,4 @@
+import Constants from "expo-constants";
 import { NativeModules, Platform } from "react-native";
 
 // IMPORTANT:
@@ -9,26 +10,52 @@ import { NativeModules, Platform } from "react-native";
 const ANDROID_EMULATOR_BASE_URL = "http://10.0.2.2:8080/api";
 const IOS_SIMULATOR_BASE_URL = "http://localhost:8080/api";
 
+function normalizeHost(host) {
+  return host?.replace(/:\d+$/, "").trim() || null;
+}
+
 function normalizeBaseUrl(url) {
   return url.replace(/\/+$/, "");
 }
 
-function getPackagerHost() {
-  const scriptURL = NativeModules?.SourceCode?.scriptURL;
-  if (!scriptURL || typeof scriptURL !== "string") {
+function isLoopbackHost(host) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isPrivateIpv4Host(host) {
+  return /^(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)$/.test(
+    host
+  );
+}
+
+function getHostFromUrl(urlLike) {
+  if (!urlLike || typeof urlLike !== "string") {
     return null;
   }
 
   try {
-    const url = new URL(scriptURL);
-    return url.hostname || null;
+    const url = new URL(urlLike.includes("://") ? urlLike : `http://${urlLike}`);
+    return normalizeHost(url.hostname);
   } catch {
-    return null;
+    return normalizeHost(urlLike.split("/")[0]);
   }
 }
 
-function isLoopbackHost(host) {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+function getPackagerHost() {
+  const hostCandidates = [
+    Constants.expoConfig?.hostUri,
+    Constants.expoGoConfig?.debuggerHost,
+    NativeModules?.SourceCode?.scriptURL,
+  ];
+
+  for (const candidate of hostCandidates) {
+    const host = getHostFromUrl(candidate);
+    if (host) {
+      return host;
+    }
+  }
+
+  return null;
 }
 
 function getLoopbackDevBaseUrl() {
@@ -45,16 +72,26 @@ function getDevBaseUrl() {
 
   const host = getPackagerHost();
   if (host) {
-    return isLoopbackHost(host)
-      ? getLoopbackDevBaseUrl()
-      : `http://${host}:8080/api`;
+    if (isLoopbackHost(host)) {
+      return getLoopbackDevBaseUrl();
+    }
+
+    if (isPrivateIpv4Host(host)) {
+      return `http://${host}:8080/api`;
+    }
   }
 
   return getLoopbackDevBaseUrl();
 }
 
+const DEV_BASE_URL = getDevBaseUrl();
+
+if (__DEV__) {
+  console.info(`[API CONFIG] Base URL: ${DEV_BASE_URL}`);
+}
+
 export const API_CONFIG = {
-  BASE_URL: __DEV__ ? getDevBaseUrl() : "https://api.onehr.com/api",
+  BASE_URL: __DEV__ ? DEV_BASE_URL : "https://api.onehr.com/api",
   TIMEOUT: 30000,
   HEADERS: {
     "Content-Type": "application/json",
