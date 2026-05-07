@@ -9,7 +9,6 @@ import {
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import {
@@ -24,9 +23,9 @@ import {
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
-import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
+import { API_ENDPOINTS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
-import { normalizeEmployeeData } from '../utils/employeeData';
+import { getEmployeeData, refreshEmployeeData } from '../utils/currentEmployee';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = [
@@ -170,28 +169,25 @@ export default function ApplyLeaveScreen({ navigation }: any) {
   const loadData = async () => {
     setLoading(true);
     try {
-      const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
-      if (cached) {
-        const emp = normalizeEmployeeData(JSON.parse(cached));
-        setEmployee(emp);
+      const emp = await getEmployeeData({ forceRefresh: true });
+      if (!emp) return;
 
-        // Fetch company-specific leave types
-        const companyId = emp?.companyId;
-        const typesUrl = companyId
-          ? API_ENDPOINTS.LEAVE_TYPES.BY_COMPANY(companyId)
-          : API_ENDPOINTS.LEAVE_TYPES.LIST;
-        const typesRes = await apiClient.get(typesUrl);
-        if (typesRes.data?.isSuccess !== false) {
-          const types = typesRes.data?.data || [];
-          setLeaveTypes(types);
-        }
+      setEmployee(emp);
 
-        // Fetch balances
-        if (emp?.id) {
-          const balRes = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(emp.id));
-          if (balRes.data?.isSuccess !== false) {
-            setBalances(balRes.data?.data || []);
-          }
+      const companyId = emp?.companyId;
+      const typesUrl = companyId
+        ? API_ENDPOINTS.LEAVE_TYPES.BY_COMPANY(companyId)
+        : API_ENDPOINTS.LEAVE_TYPES.LIST;
+      const typesRes = await apiClient.get(typesUrl);
+      if (typesRes.data?.isSuccess !== false) {
+        const types = typesRes.data?.data || [];
+        setLeaveTypes(types);
+      }
+
+      if (emp?.id) {
+        const balRes = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(emp.id));
+        if (balRes.data?.isSuccess !== false) {
+          setBalances(balRes.data?.data || []);
         }
       }
     } catch (error) {
@@ -261,15 +257,22 @@ export default function ApplyLeaveScreen({ navigation }: any) {
 
     setSubmitting(true);
     try {
+      const freshEmployee = await refreshEmployeeData();
+      if (!freshEmployee?.id || !selectedLeaveType || !selectedRange.start || !selectedRange.end) {
+        Alert.alert('Error', 'Unable to refresh employee data. Please try again.');
+        return;
+      }
+
+      setEmployee(freshEmployee);
+
       const payload = {
-        employeeId: employee.id,
+        employeeId: freshEmployee.id,
         leaveTypeId: selectedLeaveType,
         startDate: selectedRange.start.toISOString().split('T')[0],
         endDate: selectedRange.end.toISOString().split('T')[0],
         leaveDays: getSelectedDaysCount(),
-        supervisorId: employee.reportingManagerId,
         reason: reason.trim(),
-        companyId: employee.companyId,
+        companyId: freshEmployee.companyId,
       };
 
       const response = await apiClient.post(API_ENDPOINTS.LEAVE.REQUEST, payload);

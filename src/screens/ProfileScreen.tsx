@@ -122,6 +122,7 @@ export default function ProfileScreen({ navigation }: any) {
       const freshEmployee = normalizeEmployeeData(response.data);
       if (freshEmployee) {
         setEmployee(freshEmployee);
+        await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(freshEmployee));
         await AsyncStorage.setItem(STORAGE_KEYS.PROFILE_CACHE, JSON.stringify({
           data: freshEmployee,
           timestamp: Date.now(),

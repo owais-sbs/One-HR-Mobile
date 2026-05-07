@@ -1,11 +1,13 @@
-import { NativeModules } from "react-native";
+import { NativeModules, Platform } from "react-native";
 
 // IMPORTANT:
-// - `localhost` works only on simulators/emulators, not on a physical phone.
-// - If Expo is running on the same machine as the backend, we can usually reuse
-//   the Expo packager host and just swap the port to 8080.
+// - Physical devices on Wi-Fi cannot call `localhost` on your laptop.
+// - When Expo serves the app from a LAN host, we reuse that host and swap in
+//   the backend port so everyone on the same network can hit the same server.
+// - For emulators/simulators, we fall back to loopback-friendly hosts.
 // - You can always override this with EXPO_PUBLIC_API_BASE_URL.
-const FALLBACK_DEV_BASE_URL = "http://192.168.1.33:8080/api";
+const ANDROID_EMULATOR_BASE_URL = "http://10.0.2.2:8080/api";
+const IOS_SIMULATOR_BASE_URL = "http://localhost:8080/api";
 
 function normalizeBaseUrl(url) {
   return url.replace(/\/+$/, "");
@@ -29,6 +31,12 @@ function isLoopbackHost(host) {
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
 }
 
+function getLoopbackDevBaseUrl() {
+  return Platform.OS === "android"
+    ? ANDROID_EMULATOR_BASE_URL
+    : IOS_SIMULATOR_BASE_URL;
+}
+
 function getDevBaseUrl() {
   const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
   if (configuredBaseUrl) {
@@ -36,11 +44,13 @@ function getDevBaseUrl() {
   }
 
   const host = getPackagerHost();
-  if (host && !isLoopbackHost(host)) {
-    return `http://${host}:8080/api`;
+  if (host) {
+    return isLoopbackHost(host)
+      ? getLoopbackDevBaseUrl()
+      : `http://${host}:8080/api`;
   }
 
-  return FALLBACK_DEV_BASE_URL;
+  return getLoopbackDevBaseUrl();
 }
 
 export const API_CONFIG = {

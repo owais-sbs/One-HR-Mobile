@@ -10,7 +10,6 @@ import {
   TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { colors } from '../theme/colors';
 import {
@@ -27,9 +26,9 @@ import {
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
-import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
+import { API_ENDPOINTS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
-import { normalizeEmployeeData } from '../utils/employeeData';
+import { getEmployeeData } from '../utils/currentEmployee';
 
 type LeaveStatus = 'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -87,9 +86,8 @@ export default function TeamLeavesScreen({ navigation }: any) {
   const loadLeaves = async () => {
     setLoading(true);
     try {
-      const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
-      if (!cached) return;
-      const emp = normalizeEmployeeData(JSON.parse(cached));
+      const emp = await getEmployeeData({ forceRefresh: true });
+      if (!emp) return;
       setEmployee(emp);
 
       if (emp?.id) {
