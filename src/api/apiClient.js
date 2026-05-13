@@ -50,6 +50,8 @@ apiClient.interceptors.response.use(
         STORAGE_KEYS.AUTH_TOKEN,
         STORAGE_KEYS.USER_DATA,
         STORAGE_KEYS.USER_ROLES,
+        STORAGE_KEYS.EMPLOYEE_DATA,
+        STORAGE_KEYS.ATTENDANCE_CACHE,
       ]);
     }
 

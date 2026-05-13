@@ -25,6 +25,7 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
     value: item.value,
     label: item.label,
     frontColor: barColor,
+    gradientColor: barColor + '80', // Add a gradient
     topLabelComponent: () => (
       <View style={styles.topLabelContainer}>
         <Text variant="bold" size={9} color={colors.text.primary}>
@@ -70,17 +71,18 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
           barWidth={32}
           spacing={28}
           roundedTop
-          roundedBottom
-          barBorderRadius={8}
+          roundedBottom={false}
+          showGradient
+          barBorderRadius={6}
           minHeight={3}
           hideRules={false}
-          rulesType="dashed"
-          rulesColor={colors.border}
+          rulesType="solid"
+          rulesColor={colors.border + '80'}
           rulesThickness={1}
           yAxisThickness={0}
           xAxisThickness={0}
-          yAxisTextStyle={{ color: colors.text.muted, fontSize: 10 }}
-          xAxisLabelTextStyle={{ color: colors.text.secondary, fontSize: 10, fontWeight: '600' }}
+          yAxisTextStyle={{ color: colors.text.muted, fontSize: 10, fontFamily: 'Inter-Medium' }}
+          xAxisLabelTextStyle={{ color: colors.text.secondary, fontSize: 10, fontFamily: 'Inter-SemiBold' }}
           noOfSections={noOfSections}
           maxValue={computedMaxValue}
           stepValue={stepValue}
@@ -92,7 +94,7 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
           width={chartWidth}
           initialSpacing={16}
           yAxisLabelSuffix={yAxisSuffix}
-          dashGap={4}
+          dashGap={0}
           yAxisLabelContainerStyle={{ width: 32 }}
           yAxisSide={0}
         />
@@ -104,15 +106,9 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: colors.border,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 0,
   },
   header: {
     flexDirection: 'row',

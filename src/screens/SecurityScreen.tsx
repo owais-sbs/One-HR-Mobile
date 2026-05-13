@@ -1,16 +1,51 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, ScrollView, TextInput, Pressable } from 'react-native';
+import { Alert, StyleSheet, View, ScrollView, TextInput, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { ShieldCheck, Eye, EyeOff, Fingerprint, Smartphone } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
+import { changePassword } from '../api/authService';
 
 export default function SecurityScreen({ navigation }: any) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleChangePassword = async () => {
+    if (!currentPassword) {
+      Alert.alert('Current password required', 'Enter your current password to continue.');
+      return;
+    }
+    if (newPassword.length < 8) {
+      Alert.alert('Password too short', 'New password must be at least 8 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Passwords do not match', 'Confirm your new password and try again.');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await changePassword({ currentPassword, newPassword });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      Alert.alert('Password changed', 'Your account password has been updated.');
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error ||
+        error?.message ||
+        'Unable to change password. Please try again.';
+      Alert.alert('Password change failed', message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
@@ -67,10 +102,28 @@ export default function SecurityScreen({ navigation }: any) {
               </View>
             </View>
 
+            <View style={styles.inputGroup}>
+              <Text variant="medium" size={12} color={colors.text.secondary} style={styles.label}>
+                Confirm New Password
+              </Text>
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  style={styles.input}
+                  secureTextEntry={!showPass}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="••••••••"
+                  placeholderTextColor={colors.text.muted}
+                />
+              </View>
+            </View>
+
             <Button
-              onPress={() => {}}
+              onPress={handleChangePassword}
               title="Change Password"
               variant="primary"
+              loading={isSubmitting}
+              disabled={isSubmitting}
               style={styles.updateButton}
             />
           </View>

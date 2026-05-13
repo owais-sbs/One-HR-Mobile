@@ -19,11 +19,12 @@ import {
   UserCheck,
   Clock,
   FileText,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { StatCard } from '../components/ui/StatCard';
 import { Button } from '../components/ui/Button';
-import { LeaveCard } from '../components/ui/LeaveCard';
 import { CustomBarChart } from '../components/ui/CustomBarChart';
 import { CustomPieChart } from '../components/ui/CustomPieChart';
 import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
@@ -31,6 +32,12 @@ import apiClient from '../api/apiClient';
 import { getCurrentEmployee } from '../api/employeeService';
 import { getCompanyById } from '../api/companyService';
 import { normalizeEmployeeData } from '../utils/employeeData';
+import {
+  formatJoiningDate,
+  getEmployeeJoiningDate,
+  hasEmployeeJoined,
+  isOnOrAfterJoiningDate,
+} from '../utils/employmentDates';
 import { refreshNotificationCenter } from '../services/notificationService';
 import { getCompanyHolidays } from '../api/holidayService';
 
@@ -124,13 +131,12 @@ function isSameDay(left: Date, right: Date) {
          left.getDate() === right.getDate();
 }
 
-function getEffectiveOutTime(item: any, company: any, currentTime: Date) {
-  if (item.outTime) return item.outTime;
-  const checkIn = new Date(item.inTime);
-  if (!Number.isNaN(checkIn.getTime()) && isSameDay(checkIn, currentTime)) {
-    return currentTime.toISOString();
-  }
-  return buildFallbackOutTime(item.inTime, company?.endTime);
+function daysUntil(date: Date, referenceDate: Date) {
+  const start = new Date(referenceDate);
+  const end = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
 }
 
 const WORKING_DAY_LABELS: Record<string, string> = {
@@ -171,6 +177,7 @@ export default function DashboardScreen({ navigation }: any) {
   const [companyLeaveTypes, setCompanyLeaveTypes] = useState<LeaveType[]>([]);
   const [upcomingHolidays, setUpcomingHolidays] = useState<any[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState(0);
+  const [recentLeaves, setRecentLeaves] = useState<any[]>([]);
 
   // Update current time every second
   useEffect(() => {
@@ -194,8 +201,19 @@ export default function DashboardScreen({ navigation }: any) {
 
   const loadDashboardData = useCallback(async () => {
     try {
+      // Reset attendance state to prevent showing old user data while loading
+      setAttendanceHistory([]);
+      setTodayAttendance(null);
+
+      const currentUserId = await AsyncStorage.getItem(STORAGE_KEYS.USER_ID);
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
-      let emp = cached ? normalizeEmployeeData(JSON.parse(cached)) : null;
+      let emp = null;
+      if (cached) {
+        const parsed = normalizeEmployeeData(JSON.parse(cached));
+        if (parsed?.accountId === currentUserId || String(parsed?.id) === currentUserId) {
+          emp = parsed;
+        }
+      }
 
       if (!emp) {
         const response = await getCurrentEmployee();
@@ -356,9 +374,17 @@ export default function DashboardScreen({ navigation }: any) {
         .filter((leave: any) => String(leave.status).toUpperCase() === 'PENDING')
         .reduce((sum: number, leave: any) => sum + (Number(leave.leaveDays) || 0), 0);
       setPendingLeaves(pendingDays);
+
+      const sorted = [...list].sort((a: any, b: any) => {
+        const da = new Date(a.createdAt || a.startDate).getTime();
+        const db = new Date(b.createdAt || b.startDate).getTime();
+        return db - da;
+      });
+      setRecentLeaves(sorted.slice(0, 3));
     } catch (error) {
       console.error('Fetch pending leaves error:', error);
       setPendingLeaves(0);
+      setRecentLeaves([]);
     }
   };
 
@@ -465,12 +491,6 @@ export default function DashboardScreen({ navigation }: any) {
     { type: 'Casual Leave', left: 4, total: 5, color: colors.warning },
   ];
 
-  const companyLeaveTypeMap = new Map(
-    companyLeaveTypes
-      .filter((type) => type?.id != null)
-      .map((type) => [Number(type.id), type] as const)
-  );
-
   const workStartTime = extractTimeFromDateTime(company?.startTime);
   const workEndTime = extractTimeFromDateTime(company?.endTime);
   const workDurationMs = workStartTime && workEndTime
@@ -486,6 +506,17 @@ export default function DashboardScreen({ navigation }: any) {
     return WORKING_DAY_ORDER.filter((day) => Boolean(company.workingDays?.[day]));
   }, [company]);
 
+  const joiningDate = useMemo(() => getEmployeeJoiningDate(employee), [employee]);
+  const employeeHasJoined = useMemo(
+    () => hasEmployeeJoined(employee, currentTime),
+    [employee, currentTime]
+  );
+  const joiningDateLabel = useMemo(() => formatJoiningDate(employee), [employee]);
+  const daysUntilJoining = useMemo(
+    () => (joiningDate ? daysUntil(joiningDate, currentTime) : 0),
+    [joiningDate, currentTime]
+  );
+
   const combinedAttendanceHistory = useMemo(() => {
     const history = [...attendanceHistory];
     if (todayAttendance?.inTime) {
@@ -500,8 +531,11 @@ export default function DashboardScreen({ navigation }: any) {
         return filtered;
       }
     }
-    return history;
-  }, [attendanceHistory, todayAttendance]);
+    return history.filter((item) => {
+      const checkIn = new Date(item.inTime);
+      return !Number.isNaN(checkIn.getTime()) && isOnOrAfterJoiningDate(checkIn, employee);
+    });
+  }, [attendanceHistory, employee, todayAttendance]);
 
   const monthlyAttendance = useMemo(
     () => combinedAttendanceHistory.filter((item) => {
@@ -575,46 +609,29 @@ export default function DashboardScreen({ navigation }: any) {
           color: leave.color,
         }));
 
-  const displayLeaveBalances = companyLeaveTypes.length > 0
-    ? companyLeaveTypes.map((type, index) => {
-        const matchingBalance = leaveBalances.find(
-          (balance) => Number(balance.leaveTypeId) === Number(type.id)
-        );
-        return {
-          type: type.name,
-          left: matchingBalance?.remaining ?? matchingBalance?.totalAllocated ?? type.totalDays ?? 0,
-          total: matchingBalance?.totalAllocated ?? type.totalDays ?? 0,
-          color: type.color || [colors.secondary, colors.success, colors.warning][index % 3],
-        };
-      })
-    : leaveBalances.length > 0
-      ? leaveBalances.map((balance, index) => {
-          const companyType = companyLeaveTypeMap.get(Number(balance.leaveTypeId));
-          return {
-            type: companyType?.name || balance.leaveTypeName || 'Leave',
-            left: balance.remaining ?? companyType?.totalDays ?? balance.totalAllocated ?? 0,
-            total: balance.totalAllocated ?? companyType?.totalDays ?? 0,
-            color: companyType?.color || [colors.secondary, colors.success, colors.warning][index % 3],
-          };
-        })
-      : defaultBalances;
-
   const openAttendanceReport = () => {
     navigation.navigate('Attendance');
   };
+
+  const pendingSubtitle = daysUntilJoining === 0
+    ? 'Your attendance will become active on your joining date.'
+    : daysUntilJoining === 1
+      ? 'Your attendance will become active in 1 day.'
+      : `Your attendance will become active in ${daysUntilJoining} days.`;
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        contentInsetAdjustmentBehavior="automatic"
       >
         <View style={styles.header}>
           <View style={styles.greeting}>
-            <Text variant="medium" size={12} color={colors.text.muted} style={styles.greetingLabel}>
-              Good Morning,
+            <Text variant="semibold" size={13} color="#8E8E93" style={styles.greetingLabel}>
+              GOOD MORNING
             </Text>
-            <Text variant="bold" size={20} color={colors.text.primary}>
+            <Text variant="bold" size={28} color="#000000" style={styles.greetingName}>
               {employee
                 ? `${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.accountName || 'Employee'
                 : 'Employee'}
@@ -627,261 +644,332 @@ export default function DashboardScreen({ navigation }: any) {
               { opacity: pressed ? 0.7 : 1 }
             ]}
           >
-            <Text variant="semibold" size={14} color={colors.text.primary}>
+            <Text variant="bold" size={14} color="#000000">
               {getInitials(employee?.firstName, employee?.lastName)}
             </Text>
           </Pressable>
         </View>
 
-        <View style={styles.clockCard}>
-          <View style={styles.dateBadge}>
-            <Calendar size={12} color="rgba(255,255,255,0.8)" />
-            <Text variant="medium" size={11} color="rgba(255,255,255,0.8)" style={styles.dateText}>
-              {dateStr}
+        {!employeeHasJoined ? (
+          <View style={styles.pendingPage}>
+            <View style={styles.pendingPageIconWrap}>
+              <Calendar size={28} color="#FFFFFF" />
+            </View>
+            <Text variant="bold" size={30} color="#000000" style={styles.pendingPageTitle}>
+              Joining Pending
+            </Text>
+            <Text variant="medium" size={15} color={colors.text.secondary} style={styles.pendingPageText}>
+              Attendance and weekly activity will be available after you join.
+            </Text>
+            <View style={styles.pendingPageDateCard}>
+              <Text variant="medium" size={12} color={colors.text.secondary}>
+                Joining Date
+              </Text>
+              <Text variant="bold" size={22} color="#000000" style={styles.pendingPageDateValue}>
+                {joiningDateLabel}
+              </Text>
+            </View>
+            <Text variant="medium" size={13} color={colors.text.secondary} style={styles.pendingPageHint}>
+              {pendingSubtitle}
             </Text>
           </View>
-          <Text variant="bold" size={36} color="#FFFFFF" style={styles.timeText}>
-            {timeStr}
-          </Text>
-
-          {todayAttendance?.inTime && (
-            <View style={styles.loggedHoursContainer}>
-              <Clock size={14} color="rgba(255,255,255,0.9)" />
-              <Text variant="semibold" size={13} color="rgba(255,255,255,0.9)" style={styles.loggedHoursText}>
-                {isClockedIn ? 'Logged In: ' : 'Total Hours: '}
-                {formatDuration(elapsedMs)}
-              </Text>
-            </View>
-          )}
-
-          {company && (
-            <View style={styles.workingHoursRow}>
-              <Text variant="medium" size={11} color="rgba(255,255,255,0.6)">
-                Work: {workStartTime ? workStartTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—'} — {workEndTime ? workEndTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—'}
-              </Text>
-            </View>
-          )}
-
-          {workDurationMs > 0 && (
-            <View style={styles.progressContainer}>
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
-              </View>
-              <Text variant="medium" size={10} color="rgba(255,255,255,0.6)">
-                {progressPercent}% of daily hours
-              </Text>
-            </View>
-          )}
-
-          {todayAttendance?.inTime && (
-            <View style={styles.timesRow}>
-              <View style={styles.timeBox}>
-                <Text variant="medium" size={10} color="rgba(255,255,255,0.6)" style={{marginBottom: 2}}>In Time</Text>
-                <Text variant="bold" size={14} color="#FFFFFF">{formatTime(todayAttendance.inTime)}</Text>
-              </View>
-              <View style={styles.verticalDivider} />
-              <View style={styles.timeBox}>
-                <Text variant="medium" size={10} color="rgba(255,255,255,0.6)" style={{marginBottom: 2}}>Out Time</Text>
-                <Text variant="bold" size={14} color="#FFFFFF">
-                  {todayAttendance?.outTime ? formatTime(todayAttendance.outTime) : '—'}
+        ) : (
+          <>
+            <View style={styles.clockCard}>
+              <View style={styles.dateBadge}>
+                <Calendar size={12} color="rgba(255,255,255,0.8)" />
+                <Text variant="medium" size={11} color="rgba(255,255,255,0.8)" style={styles.dateText}>
+                  {dateStr}
                 </Text>
               </View>
-            </View>
-          )}
-
-          <Button
-            onPress={isClockedIn ? handleClockOut : handleClockIn}
-            title={isClockedIn ? "Clock Out" : "Clock In"}
-            variant={isClockedIn ? "danger" : "secondary"}
-            size="md"
-            icon={isClockedIn ? <LogOut size={16} color="#fff" /> : <LogIn size={16} color="#fff" />}
-            style={styles.clockButton}
-            disabled={loading}
-          />
-          {loading && <ActivityIndicator style={styles.loader} color="#FFFFFF" />}
-        </View>
-
-        <View style={styles.statsGrid}>
-          <StatCard
-            label="Leaves Pending"
-            value={String(pendingLeaves)}
-            description="Awaiting approval"
-            color={colors.warning}
-            icon={<FileText size={18} color={colors.warning} />}
-            style={styles.statCard}
-            onPress={() => navigation.navigate('LeaveHistory')}
-          />
-          <StatCard
-            label="Monthly Hours"
-            value={`${monthlyHours.toFixed(1)}h`}
-            description="Logged this month"
-            color={colors.success}
-            icon={<UserCheck size={18} color={colors.success} />}
-            style={styles.statCard}
-            onPress={openAttendanceReport}
-          />
-        </View>
-
-        <View style={styles.chartsGrid}>
-          <Pressable
-            onPress={openAttendanceReport}
-            style={({ pressed }) => [
-              styles.chartContainer,
-              pressed && styles.chartPressablePressed,
-            ]}
-          >
-            <CustomBarChart
-              title="Weekly Activity"
-              data={weeklyActivityData.length > 0 ? weeklyActivityData : [
-                { value: 0, label: "Mon" },
-                { value: 0, label: "Tue" },
-                { value: 0, label: "Wed" },
-                { value: 0, label: "Thu" },
-                { value: 0, label: "Fri" },
-              ]}
-              yAxisSuffix="h"
-            />
-            <Text variant="medium" size={11} color={colors.text.secondary} style={styles.chartHint}>
-              Tap to view full attendance report
-            </Text>
-          </Pressable>
-
-          <View style={styles.chartContainer}>
-            <CustomPieChart
-              title="Leave Distribution"
-              data={leaveChartData}
-            />
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="bold" size={16} color={colors.text.primary}>
-              Leave Balances
-            </Text>
-            <Pressable onPress={() => navigation.navigate('ApplyLeave')} style={styles.actionButton}>
-              <Text variant="semibold" size={12} color={colors.secondary}>
-                + Apply Leave
+              <Text variant="bold" size={36} color="#FFFFFF" style={styles.timeText}>
+                {timeStr}
               </Text>
-            </Pressable>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.horizontalScroll}
-          >
-            {displayLeaveBalances.map((leave: any, index: number, arr: any[]) => (
-              <LeaveCard
-                key={index}
-                label={leave.type}
-                left={leave.left}
-                total={leave.total}
-                color={leave.color}
-                style={[index < arr.length - 1 ? styles.leaveCardMargin : undefined, styles.leaveCardElevated]}
+
+              {todayAttendance?.inTime && (
+                <View style={styles.loggedHoursContainer}>
+                  <Clock size={14} color="rgba(255,255,255,0.9)" />
+                  <Text variant="semibold" size={13} color="rgba(255,255,255,0.9)" style={styles.loggedHoursText}>
+                    {isClockedIn ? 'Logged In: ' : 'Total Hours: '}
+                    {formatDuration(elapsedMs)}
+                  </Text>
+                </View>
+              )}
+
+              {company && (
+                <View style={styles.workingHoursRow}>
+                  <Text variant="medium" size={11} color="rgba(255,255,255,0.6)">
+                    Work: {workStartTime ? workStartTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—'} — {workEndTime ? workEndTime.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—'}
+                  </Text>
+                </View>
+              )}
+
+              {workDurationMs > 0 && (
+                <View style={styles.progressContainer}>
+                  <View style={styles.progressBarBg}>
+                    <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
+                  </View>
+                  <Text variant="medium" size={10} color="rgba(255,255,255,0.6)">
+                    {progressPercent}% of daily hours
+                  </Text>
+                </View>
+              )}
+
+              {todayAttendance?.inTime && (
+                <View style={styles.timesRow}>
+                  <View style={styles.timeBox}>
+                    <Text variant="medium" size={10} color="rgba(255,255,255,0.6)" style={{marginBottom: 2}}>In Time</Text>
+                    <Text variant="bold" size={14} color="#FFFFFF">{formatTime(todayAttendance.inTime)}</Text>
+                  </View>
+                  <View style={styles.verticalDivider} />
+                  <View style={styles.timeBox}>
+                    <Text variant="medium" size={10} color="rgba(255,255,255,0.6)" style={{marginBottom: 2}}>Out Time</Text>
+                    <Text variant="bold" size={14} color="#FFFFFF">
+                      {todayAttendance?.outTime ? formatTime(todayAttendance.outTime) : '—'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              <Button
+                onPress={isClockedIn ? handleClockOut : handleClockIn}
+                title={isClockedIn ? "Clock Out" : "Clock In"}
+                variant={isClockedIn ? "danger" : "secondary"}
+                size="md"
+                icon={isClockedIn ? <LogOut size={16} color="#fff" /> : <LogIn size={16} color="#fff" />}
+                style={styles.clockButton}
+                disabled={loading}
               />
-            ))}
-          </ScrollView>
-        </View>
+              {loading && <ActivityIndicator style={styles.loader} color="#FFFFFF" />}
+            </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="bold" size={16} color={colors.text.primary}>
-              Quick Actions
-            </Text>
-          </View>
-          <View style={styles.quickActionsGrid}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.actionCard,
-                pressed && styles.actionCardPressed
-              ]}
-              onPress={() => navigation.navigate('LeaveHistory')}
-            >
-              <View style={[styles.actionIcon, { backgroundColor: colors.accent.blue }]}>
-                <FileText size={20} color={colors.secondary} />
-              </View>
-              <View style={styles.actionContent}>
-                <Text variant="bold" size={14} color={colors.text.primary}>
-                  My Leave History
+            <View style={styles.statsGrid}>
+              <StatCard
+                label="Monthly Hours"
+                value={`${monthlyHours.toFixed(1)}h`}
+                description="Logged this month"
+                color={colors.success}
+                icon={<UserCheck size={18} color={colors.success} />}
+                style={styles.statCard}
+                onPress={openAttendanceReport}
+              />
+              <StatCard
+                label="Pending Requests"
+                value={String(pendingLeaves)}
+                description="Awaiting approval"
+                color={colors.warning}
+                icon={<FileText size={18} color={colors.warning} />}
+                style={styles.statCard}
+                onPress={() => navigation.navigate('LeaveHistory')}
+              />
+            </View>
+
+            <View style={styles.chartsGrid}>
+              <Pressable
+                onPress={openAttendanceReport}
+                style={({ pressed }) => [
+                  styles.chartContainer,
+                  pressed && styles.chartPressablePressed,
+                ]}
+              >
+                <CustomBarChart
+                  title="Weekly Activity"
+                  data={weeklyActivityData.length > 0 ? weeklyActivityData : [
+                    { value: 0, label: "Mon" },
+                    { value: 0, label: "Tue" },
+                    { value: 0, label: "Wed" },
+                    { value: 0, label: "Thu" },
+                    { value: 0, label: "Fri" },
+                  ]}
+                  yAxisSuffix="h"
+                />
+                <Text variant="medium" size={11} color={colors.text.secondary} style={styles.chartHint}>
+                  Tap to view full attendance report
                 </Text>
-                <Text variant="medium" size={12} color={colors.text.secondary}>
-                  Track your leave requests
+              </Pressable>
+
+              <View style={styles.chartContainer}>
+                <CustomPieChart
+                  title="Leave Distribution"
+                  data={leaveChartData}
+                />
+              </View>
+            </View>
+
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text variant="bold" size={20} color="#000000">
+                  Recent Leave Requests
+                </Text>
+                <Pressable onPress={() => navigation.navigate('LeaveHistory')} style={styles.actionButton}>
+                  <Text variant="semibold" size={15} color="#007AFF">
+                    See All
+                  </Text>
+                </Pressable>
+              </View>
+              <View style={styles.listContainer}>
+                {recentLeaves.length > 0 ? (
+                  recentLeaves.map((leave, index) => {
+                    const isApproved = String(leave.status).toUpperCase() === 'APPROVED' || String(leave.status).toUpperCase() === 'ACCEPTED';
+                    const isRejected = String(leave.status).toUpperCase() === 'REJECTED';
+
+                    let StatusIcon = Clock;
+                    let statusColor = colors.warning;
+                    if (isApproved) {
+                      StatusIcon = CheckCircle;
+                      statusColor = colors.success;
+                    } else if (isRejected) {
+                      StatusIcon = XCircle;
+                      statusColor = colors.error;
+                    }
+
+                    const d = new Date(leave.startDate);
+                    const leaveDateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+                    return (
+                      <Pressable
+                        key={leave.id || index}
+                        style={({ pressed }) => [
+                          styles.listItem,
+                          index > 0 && styles.listItemBorder,
+                          pressed && styles.listItemPressed
+                        ]}
+                        onPress={() => navigation.navigate('LeaveHistory')}
+                      >
+                        <View style={[styles.listIcon, { backgroundColor: statusColor + '15' }]}>
+                          <StatusIcon size={20} color={statusColor} />
+                        </View>
+                        <View style={styles.itemContent}>
+                          <Text variant="bold" size={15} color="#000000">
+                            {leave.leaveTypeName || 'Leave Request'}
+                          </Text>
+                          <Text variant="medium" size={13} color="#8E8E93">
+                            {leaveDateStr} • {leave.leaveDays} Day(s)
+                          </Text>
+                        </View>
+                        <ChevronRight size={18} color="#C6C6C8" />
+                      </Pressable>
+                    );
+                  })
+                ) : (
+                  <View style={styles.listItem}>
+                    <View style={[styles.listIcon, { backgroundColor: '#F2F2F7' }]}>
+                      <FileText size={20} color="#8E8E93" />
+                    </View>
+                    <View style={styles.itemContent}>
+                      <Text variant="bold" size={15} color="#000000">
+                        No recent requests
+                      </Text>
+                      <Text variant="medium" size={13} color="#8E8E93">
+                        You haven&apos;t requested any leaves yet
+                      </Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text variant="bold" size={20} color="#000000">
+                  Quick Actions
                 </Text>
               </View>
-              <ChevronRight size={18} color={colors.text.muted} />
-            </Pressable>
-          </View>
-        </View>
+              <View style={styles.quickActionsGrid}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.actionCard,
+                    pressed && styles.actionCardPressed
+                  ]}
+                  onPress={() => navigation.navigate('LeaveHistory')}
+                >
+                  <View style={[styles.actionIcon, { backgroundColor: colors.accent.blue }]}>
+                    <FileText size={20} color={colors.secondary} />
+                  </View>
+                  <View style={styles.actionContent}>
+                    <Text variant="bold" size={14} color={colors.text.primary}>
+                      My Leave History
+                    </Text>
+                    <Text variant="medium" size={12} color={colors.text.secondary}>
+                      Track your leave requests
+                    </Text>
+                  </View>
+                  <ChevronRight size={18} color={colors.text.muted} />
+                </Pressable>
+              </View>
+            </View>
 
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text variant="bold" size={16} color={colors.text.primary}>
-              Upcoming Holidays
-            </Text>
-            <Pressable onPress={() => navigation.navigate('HolidayList')} style={styles.actionButton}>
-              <Text variant="semibold" size={12} color={colors.secondary}>
-                See All
-              </Text>
-            </Pressable>
-          </View>
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text variant="bold" size={20} color="#000000">
+                  Upcoming Holidays
+                </Text>
+                <Pressable onPress={() => navigation.navigate('HolidayList')} style={styles.actionButton}>
+                  <Text variant="semibold" size={15} color="#007AFF">
+                    See All
+                  </Text>
+                </Pressable>
+              </View>
 
-          <View style={styles.holidaysContainer}>
-            {upcomingHolidays.length > 0 ? (
-              upcomingHolidays.map((holiday, index) => {
-                const dateStr = holiday.date.toLocaleDateString('en-US', {
-                  day: '2-digit',
-                  month: 'short',
-                  year: 'numeric',
-                });
-                return (
+              <View style={styles.listContainer}>
+                {upcomingHolidays.length > 0 ? (
+                  upcomingHolidays.map((holiday, index) => {
+                    const holidayDateStr = holiday.date.toLocaleDateString('en-US', {
+                      day: '2-digit',
+                      month: 'short',
+                      year: 'numeric',
+                    });
+                    return (
+                      <Pressable
+                        key={holiday.id}
+                        style={({ pressed }) => [
+                          styles.listItem,
+                          index > 0 && styles.listItemBorder,
+                          pressed && styles.listItemPressed
+                        ]}
+                        onPress={() => navigation.navigate('HolidayList')}
+                      >
+                        <View style={[styles.listIcon, { backgroundColor: '#F0F4F8' }]}>
+                          <Calendar size={18} color={colors.secondary} />
+                        </View>
+                        <View style={styles.itemContent}>
+                          <Text variant="bold" size={14} color="#000000">
+                            {holiday.name}
+                          </Text>
+                          <Text variant="medium" size={12} color="#8E8E93">
+                            {holidayDateStr}
+                          </Text>
+                        </View>
+                        <ChevronRight size={18} color="#C6C6C8" />
+                      </Pressable>
+                    );
+                  })
+                ) : (
                   <Pressable
-                    key={holiday.id}
                     style={({ pressed }) => [
-                      styles.holidayItem,
-                      index > 0 && styles.holidayItemBorder,
-                      pressed && styles.holidayItemPressed
+                      styles.listItem,
+                      pressed && styles.listItemPressed
                     ]}
                     onPress={() => navigation.navigate('HolidayList')}
                   >
-                    <View style={[styles.holidayIcon, { backgroundColor: '#F0F4F8' }]}>
+                    <View style={[styles.listIcon, { backgroundColor: '#F0F4F8' }]}>
                       <Calendar size={18} color={colors.secondary} />
                     </View>
                     <View style={styles.itemContent}>
-                      <Text variant="bold" size={14} color={colors.text.primary}>
-                        {holiday.name}
+                      <Text variant="bold" size={14} color="#000000">
+                        No upcoming holidays
                       </Text>
-                      <Text variant="medium" size={12} color={colors.text.secondary}>
-                        {dateStr}
+                      <Text variant="medium" size={12} color="#8E8E93">
+                        Check back later
                       </Text>
                     </View>
-                    <ChevronRight size={18} color={colors.text.muted} />
+                    <ChevronRight size={18} color="#C6C6C8" />
                   </Pressable>
-                );
-              })
-            ) : (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.holidayItem,
-                  pressed && styles.holidayItemPressed
-                ]}
-                onPress={() => navigation.navigate('HolidayList')}
-              >
-                <View style={[styles.holidayIcon, { backgroundColor: '#F0F4F8' }]}>
-                  <Calendar size={18} color={colors.secondary} />
-                </View>
-                <View style={styles.itemContent}>
-                  <Text variant="bold" size={14} color={colors.text.primary}>
-                    No upcoming holidays
-                  </Text>
-                  <Text variant="medium" size={12} color={colors.text.secondary}>
-                    Check back later
-                  </Text>
-                </View>
-                <ChevronRight size={18} color={colors.text.muted} />
-              </Pressable>
-            )}
-          </View>
-        </View>
+                )}
+              </View>
+            </View>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -890,7 +978,7 @@ export default function DashboardScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F7F8FA',
+    backgroundColor: '#F2F2F7', // iOS System Background
   },
   scrollContent: {
     padding: 16,
@@ -901,40 +989,42 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
+    paddingHorizontal: 4,
   },
   greeting: {
     gap: 2,
   },
   greetingLabel: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  greetingName: {
+    letterSpacing: -0.5,
   },
   avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
+    width: 48,
+    height: 48,
+    borderRadius: 24, // perfectly round
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 2,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
   },
   clockCard: {
-    backgroundColor: '#1E293B',
+    backgroundColor: '#000000', // Deep black for premium Apple widget feel
     borderRadius: 24,
-    padding: 20,
+    padding: 24,
     alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#1E293B',
-    shadowOffset: { width: 0, height: 6 },
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.2,
-    shadowRadius: 10,
+    shadowRadius: 16,
     elevation: 8,
   },
   dateBadge: {
@@ -1017,19 +1107,105 @@ const styles = StyleSheet.create({
   loader: {
     marginTop: 10,
   },
+  pendingPage: {
+    flex: 1,
+    minHeight: 520,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+  },
+  pendingPageIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+  },
+  pendingPageTitle: {
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  pendingPageText: {
+    textAlign: 'center',
+    maxWidth: 280,
+    lineHeight: 22,
+    marginBottom: 22,
+  },
+  pendingPageDateCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 3,
+    marginBottom: 16,
+  },
+  pendingPageDateValue: {
+    marginTop: 6,
+  },
+  pendingPageHint: {
+    textAlign: 'center',
+    maxWidth: 280,
+    lineHeight: 18,
+  },
+  pendingCardContent: {
+    width: '100%',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  pendingIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  pendingTitle: {
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  pendingText: {
+    textAlign: 'center',
+    marginBottom: 14,
+  },
+  pendingDatePill: {
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginBottom: 12,
+  },
+  pendingHint: {
+    textAlign: 'center',
+    maxWidth: 240,
+    lineHeight: 18,
+  },
   statsGrid: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     gap: 12,
     marginBottom: 20,
   },
   statCard: {
     flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 0,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
-    borderWidth: 0,
   },
   chartsGrid: {
     gap: 16,
@@ -1038,12 +1214,13 @@ const styles = StyleSheet.create({
   chartContainer: {
     backgroundColor: '#FFFFFF',
     borderRadius: 20,
-    padding: 16,
+    padding: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowRadius: 8,
+    elevation: 2,
+    borderWidth: 0,
   },
   chartPressablePressed: {
     opacity: 0.9,
@@ -1059,15 +1236,13 @@ const styles = StyleSheet.create({
   sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingHorizontal: 2,
+    alignItems: 'flex-end',
+    marginBottom: 16,
+    paddingHorizontal: 4,
   },
   actionButton: {
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
   },
   horizontalScroll: {
     paddingRight: 16,
@@ -1091,13 +1266,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 20,
     padding: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
+    borderWidth: 0,
   },
   actionCardPressed: {
     backgroundColor: '#F8FAFC',
@@ -1114,33 +1290,35 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 2,
   },
-  holidaysContainer: {
+  listContainer: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 20,
     overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.04,
-    shadowRadius: 4,
+    shadowRadius: 8,
     elevation: 2,
+    borderWidth: 0,
   },
-  holidayItem: {
+  listItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
     backgroundColor: '#FFFFFF',
   },
-  holidayItemBorder: {
-    borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
+  listItemBorder: {
+    borderTopWidth: 0.5,
+    borderTopColor: '#E5E5EA', // Apple standard separator
+    marginLeft: 60, // inset separator
   },
-  holidayItemPressed: {
+  listItemPressed: {
     backgroundColor: '#F8FAFC',
   },
-  holidayIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
+  listIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 14,

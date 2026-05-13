@@ -19,6 +19,12 @@ import { API_ENDPOINTS, STORAGE_KEYS, CACHE_TTL } from '../config/apiConfig';
 import { getCurrentEmployee } from '../api/employeeService';
 import { getCompanyById } from '../api/companyService';
 import { normalizeEmployeeData } from '../utils/employeeData';
+import {
+  formatJoiningDate,
+  getEmployeeJoiningDate,
+  hasEmployeeJoined,
+  isOnOrAfterJoiningDate,
+} from '../utils/employmentDates';
 
 const WEEKDAY_ORDER = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const WEEKDAY_BY_INDEX = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -115,19 +121,30 @@ function buildFallbackOutTime(inTime?: string, endTime?: string) {
 export default function AttendanceReportScreen() {
   const [attendanceData, setAttendanceData] = useState<AttendanceItem[]>([]);
   const [company, setCompany] = useState<any>(null);
+  const [employee, setEmployee] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadAttendance = useCallback(async (forceRefresh = false) => {
+    const userId = await AsyncStorage.getItem(STORAGE_KEYS.USER_ID);
+    const attendanceCacheKey = `${STORAGE_KEYS.ATTENDANCE_CACHE}_${userId || 'unknown'}`;
+
     if (forceRefresh) {
       setRefreshing(true);
-      await AsyncStorage.removeItem(STORAGE_KEYS.ATTENDANCE_CACHE);
+      await AsyncStorage.removeItem(attendanceCacheKey);
     } else {
       setLoading(true);
     }
     try {
+      const cachedUserId = await AsyncStorage.getItem(STORAGE_KEYS.USER_ID);
       const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
-      let employee = cached ? normalizeEmployeeData(JSON.parse(cached)) : null;
+      let employee = null;
+      if (cached) {
+        const parsed = normalizeEmployeeData(JSON.parse(cached));
+        if (parsed?.accountId === cachedUserId || String(parsed?.id) === cachedUserId) {
+          employee = parsed;
+        }
+      }
 
       if (!employee) {
         const response = await getCurrentEmployee();
@@ -136,6 +153,8 @@ export default function AttendanceReportScreen() {
           await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(employee));
         }
       }
+
+      setEmployee(employee);
 
       if (employee?.companyId) {
         const cachedCompany = await AsyncStorage.getItem(`${STORAGE_KEYS.COMPANY_DATA}_${employee.companyId}`);
@@ -157,7 +176,7 @@ export default function AttendanceReportScreen() {
 
       if (!forceRefresh) {
         const now = Date.now();
-        const attendanceCache = await AsyncStorage.getItem(STORAGE_KEYS.ATTENDANCE_CACHE);
+        const attendanceCache = await AsyncStorage.getItem(attendanceCacheKey);
         if (attendanceCache) {
           const { data, timestamp } = JSON.parse(attendanceCache);
           if (now - timestamp < CACHE_TTL.ATTENDANCE) {
@@ -171,7 +190,7 @@ export default function AttendanceReportScreen() {
       const data = response.data?.data || [];
       const attendanceList = Array.isArray(data) ? data : [];
       setAttendanceData(attendanceList);
-      await AsyncStorage.setItem(STORAGE_KEYS.ATTENDANCE_CACHE, JSON.stringify({
+      await AsyncStorage.setItem(attendanceCacheKey, JSON.stringify({
         data: attendanceList,
         timestamp: Date.now(),
       }));
@@ -195,6 +214,12 @@ export default function AttendanceReportScreen() {
   );
 
   const reportDate = useMemo(() => new Date(), []);
+  const joiningDate = useMemo(() => getEmployeeJoiningDate(employee), [employee]);
+  const employeeHasJoined = useMemo(
+    () => hasEmployeeJoined(employee, reportDate),
+    [employee, reportDate]
+  );
+  const joiningDateLabel = useMemo(() => formatJoiningDate(employee), [employee]);
   const companyEndTime = company?.endTime;
   const workingDayKeys = useMemo(() => {
     const enabled = Object.entries(company?.workingDays ?? {})
@@ -212,7 +237,7 @@ export default function AttendanceReportScreen() {
 
     attendanceData.forEach((item) => {
       const checkIn = parseDate(item.inTime);
-      if (!checkIn) return;
+      if (!checkIn || !isOnOrAfterJoiningDate(checkIn, employee)) return;
       const key = getDateKey(checkIn);
       if (!recordMap.has(key)) {
         recordMap.set(key, item);
@@ -230,9 +255,12 @@ export default function AttendanceReportScreen() {
       const isWorkingDay = workingDayKeys.length > 0
         ? workingDayKeys.includes(weekdayKey)
         : true;
+      const dateReachedJoining = isOnOrAfterJoiningDate(cursor, employee);
 
       let status: ReportDay['status'] = 'Off Day';
-      if (isWorkingDay) {
+      if (!dateReachedJoining) {
+        status = 'Working Day';
+      } else if (isWorkingDay) {
         if (fallbackOutTime) {
           status = 'Present';
         } else if (record?.inTime) {
@@ -261,7 +289,7 @@ export default function AttendanceReportScreen() {
     }
 
     return days;
-  }, [attendanceData, companyEndTime, reportDate, workingDayKeys]);
+  }, [attendanceData, companyEndTime, employee, reportDate, workingDayKeys]);
 
   const presentCount = monthDays.filter((day) => day.status === 'Present').length;
   const clockedInCount = monthDays.filter((day) => day.status === 'Clocked In').length;
@@ -274,6 +302,22 @@ export default function AttendanceReportScreen() {
 
   const ListHeader = () => (
     <View style={styles.headerContent}>
+      {!employeeHasJoined && (
+        <View style={styles.pendingBanner}>
+          <View style={styles.pendingIcon}>
+            <Calendar size={18} color={colors.secondary} />
+          </View>
+          <View style={styles.pendingContent}>
+            <Text variant="bold" size={15} color={colors.text.primary}>
+              Joining pending
+            </Text>
+            <Text variant="regular" size={12} color={colors.text.secondary}>
+              Attendance will start from {joiningDateLabel}.
+            </Text>
+          </View>
+        </View>
+      )}
+
       <View style={styles.monthSelector}>
         <Calendar size={18} color={colors.secondary} />
         <View style={styles.monthTextBlock}>
@@ -318,7 +362,7 @@ export default function AttendanceReportScreen() {
           <View style={styles.statDivider} />
           <View style={styles.statBlock}>
             <Text variant="bold" size={16} color={colors.text.primary}>
-              {todayEntry?.status || 'No record'}
+              {!employeeHasJoined ? 'Pending Join' : todayEntry?.status || 'No record'}
             </Text>
             <Text variant="regular" size={11} color={colors.text.secondary}>
               Today&apos;s status
@@ -355,6 +399,8 @@ export default function AttendanceReportScreen() {
       ? item.outTime
         ? formatDuration(item.hours)
         : 'In progress'
+      : joiningDate && item.date < joiningDate
+        ? 'Joining pending'
       : item.workingDay
         ? 'No clock in recorded'
         : 'Scheduled off';
@@ -469,6 +515,28 @@ const styles = StyleSheet.create({
   },
   headerContent: {
     marginBottom: 4,
+  },
+  pendingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 14,
+    marginBottom: 14,
+    gap: 12,
+  },
+  pendingIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent.blue,
+  },
+  pendingContent: {
+    flex: 1,
   },
   monthSelector: {
     flexDirection: 'row',

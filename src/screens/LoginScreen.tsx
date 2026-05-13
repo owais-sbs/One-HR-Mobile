@@ -61,6 +61,20 @@ export default function LoginScreen({ navigation }: any) {
         return;
       }
 
+      // Clear any leftover data from a previous user before storing new credentials
+      const allKeys = await AsyncStorage.getAllKeys();
+      const companyCacheKeys = allKeys.filter((k) => k.startsWith(STORAGE_KEYS.COMPANY_DATA));
+      await AsyncStorage.multiRemove([
+        ...companyCacheKeys,
+        STORAGE_KEYS.EMPLOYEE_DATA,
+        STORAGE_KEYS.ATTENDANCE_CACHE,
+        STORAGE_KEYS.PROFILE_CACHE,
+        STORAGE_KEYS.DEPARTMENT_CACHE,
+        STORAGE_KEYS.SALARY_DATA_CACHE,
+        STORAGE_KEYS.SALARY_STRUCTURE_CACHE,
+        STORAGE_KEYS.SALARY_HISTORY_CACHE,
+      ]);
+
       await AsyncStorage.multiSet([
         [STORAGE_KEYS.AUTH_TOKEN, token],
         [STORAGE_KEYS.USER_ID, userId],

@@ -29,8 +29,8 @@ export const CustomPieChart: React.FC<CustomPieChartProps> = ({
             donut
             showGradient
             sectionAutoFocus
-            radius={50}
-            innerRadius={38}
+            radius={55}
+            innerRadius={40}
             innerCircleColor={'#FFFFFF'}
             centerLabelComponent={() => {
               return (
@@ -63,10 +63,9 @@ export const CustomPieChart: React.FC<CustomPieChartProps> = ({
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EEEEEE',
-    borderRadius: 16,
-    padding: 14,
+    borderWidth: 0,
+    borderRadius: 20,
+    padding: 16,
   },
   title: {
     marginBottom: 12,

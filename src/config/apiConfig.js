@@ -108,6 +108,7 @@ export const API_ENDPOINTS = {
     LOGIN: "/accounts/login",
     LOGOUT: "/accounts/logout",
     REFRESH_TOKEN: "/accounts/refresh",
+    CHANGE_PASSWORD: "/accounts/change-password",
   },
   EMPLOYEES: {
     LIST: "/employee",

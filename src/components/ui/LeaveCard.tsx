@@ -52,11 +52,10 @@ export const LeaveCard: React.FC<LeaveCardProps> = ({
 const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#F0F0F0',
-    borderRadius: 14,
-    padding: 12,
-    width: 130,
+    borderWidth: 0,
+    borderRadius: 20,
+    padding: 16,
+    width: 135,
   },
   topRow: {
     flexDirection: 'row',

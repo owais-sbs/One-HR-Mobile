@@ -183,12 +183,21 @@ export default function ProfileScreen({ navigation }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
+              const allKeys = await AsyncStorage.getAllKeys();
+              const companyCacheKeys = allKeys.filter((k) => k.startsWith(STORAGE_KEYS.COMPANY_DATA));
               await AsyncStorage.multiRemove([
+                ...companyCacheKeys,
                 STORAGE_KEYS.AUTH_TOKEN,
                 STORAGE_KEYS.USER_ID,
                 STORAGE_KEYS.USER_DATA,
                 STORAGE_KEYS.USER_ROLES,
                 STORAGE_KEYS.EMPLOYEE_DATA,
+                STORAGE_KEYS.ATTENDANCE_CACHE,
+                STORAGE_KEYS.PROFILE_CACHE,
+                STORAGE_KEYS.DEPARTMENT_CACHE,
+                STORAGE_KEYS.SALARY_DATA_CACHE,
+                STORAGE_KEYS.SALARY_STRUCTURE_CACHE,
+                STORAGE_KEYS.SALARY_HISTORY_CACHE,
               ]);
               navigation.navigate('Login');
             } catch (error) {
