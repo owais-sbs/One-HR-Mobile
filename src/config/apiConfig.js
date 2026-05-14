@@ -1,101 +1,19 @@
-import Constants from "expo-constants";
-import { NativeModules, Platform } from "react-native";
-
-// IMPORTANT:
-// - Physical devices on Wi-Fi cannot call `localhost` on your laptop.
-// - When Expo serves the app from a LAN host, we reuse that host and swap in
-//   the backend port so everyone on the same network can hit the same server.
-// - For emulators/simulators, we fall back to loopback-friendly hosts.
-// - If no reachable local/LAN backend can be inferred, we fall back to the
-//   local backend defaults for testing.
-// - You can always override this with EXPO_PUBLIC_API_BASE_URL.
-const ANDROID_EMULATOR_BASE_URL = "http://10.0.2.2:8080/api";
-const IOS_SIMULATOR_BASE_URL = "http://localhost:8080/api";
-
-function normalizeHost(host) {
-  return host?.replace(/:\d+$/, "").trim() || null;
-}
-
 function normalizeBaseUrl(url) {
   return url.replace(/\/+$/, "");
 }
 
-function isLoopbackHost(host) {
-  return host === "localhost" || host === "127.0.0.1" || host === "::1";
-}
-
-function isPrivateIpv4Host(host) {
-  return /^(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)$/.test(
-    host
-  );
-}
-
-function getHostFromUrl(urlLike) {
-  if (!urlLike || typeof urlLike !== "string") {
-    return null;
-  }
-
-  try {
-    const url = new URL(urlLike.includes("://") ? urlLike : `http://${urlLike}`);
-    return normalizeHost(url.hostname);
-  } catch {
-    return normalizeHost(urlLike.split("/")[0]);
-  }
-}
-
-function getPackagerHost() {
-  const hostCandidates = [
-    Constants.expoConfig?.hostUri,
-    Constants.manifest2?.extra?.expoClient?.hostUri,
-    Constants.expoGoConfig?.debuggerHost,
-    Constants.linkingUri,
-    NativeModules?.SourceCode?.scriptURL,
-  ];
-
-  for (const candidate of hostCandidates) {
-    const host = getHostFromUrl(candidate);
-    if (host) {
-      return host;
-    }
-  }
-
-  return null;
-}
-
-function getLoopbackDevBaseUrl() {
-  return Platform.OS === "android"
-    ? ANDROID_EMULATOR_BASE_URL
-    : IOS_SIMULATOR_BASE_URL;
-}
-
-function getDevBaseUrl() {
-  const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
-  if (configuredBaseUrl) {
-    return normalizeBaseUrl(configuredBaseUrl);
-  }
-
-  const host = getPackagerHost();
-  if (host) {
-    if (isLoopbackHost(host)) {
-      return getLoopbackDevBaseUrl();
-    }
-
-    if (isPrivateIpv4Host(host)) {
-      return `http://${host}:8080/api`;
-    }
-  }
-
-  return getLoopbackDevBaseUrl();
-}
-
-const DEV_BASE_URL = getDevBaseUrl();
+const DEFAULT_API_BASE_URL = "https://onehr-backend.duckdns.org/api";
+const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+const RESOLVED_API_BASE_URL = normalizeBaseUrl(
+  configuredBaseUrl || DEFAULT_API_BASE_URL,
+);
 
 if (__DEV__) {
-  console.info(`[API CONFIG] Base URL: ${DEV_BASE_URL}`);
+  console.info(`[API CONFIG] Base URL: ${RESOLVED_API_BASE_URL}`);
 }
 
 export const API_CONFIG = {
-  BASE_URL: __DEV__ ? DEV_BASE_URL : IOS_SIMULATOR_BASE_URL,
+  BASE_URL: RESOLVED_API_BASE_URL,
   TIMEOUT: 30000,
   HEADERS: {
     "Content-Type": "application/json",
@@ -228,6 +146,7 @@ export const STORAGE_KEYS = {
   USER_ROLES: "userRoles",
   EMPLOYEE_DATA: "employeeData",
   COMPANY_DATA: "companyData",
+  CURRENCY_DATA: "currencyData",
   ATTENDANCE_CACHE: "attendanceCache",
   SALARY_STRUCTURE_CACHE: "salaryStructureCache",
   SALARY_DATA_CACHE: "salaryDataCache",

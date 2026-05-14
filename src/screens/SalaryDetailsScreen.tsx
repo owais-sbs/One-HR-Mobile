@@ -9,27 +9,14 @@ import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
 import { CustomLineChart } from '../components/ui/CustomLineChart';
-import { CustomRadarChart } from '../components/ui/CustomRadarChart';
 import apiClient from '../api/apiClient';
 import { API_ENDPOINTS, STORAGE_KEYS, CACHE_TTL } from '../config/apiConfig';
 import { normalizeEmployeeData } from '../utils/employeeData';
+import { useCurrency } from '../context/CurrencyContext';
+import { formatCurrency, normalizeCurrencyCode } from '../utils/currency';
 
 function unwrapApiData(response: any) {
   return response?.data?.data ?? response?.data ?? null;
-}
-
-function formatCurrency(amount?: number, currency = 'USD') {
-  if (amount == null || isNaN(amount)) return `${currency} 0.00`;
-  try {
-    return new Intl.NumberFormat('en-US', {
-      style: 'currency',
-      currency,
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  } catch {
-    return `${currency} ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  }
 }
 
 function getMonthLabel(dateString?: string) {
@@ -40,6 +27,7 @@ function getMonthLabel(dateString?: string) {
 }
 
 export default function SalaryDetailsScreen() {
+  const { currency, refreshCurrency } = useCurrency();
   const [employee, setEmployee] = useState<any>(null);
   const [salaryData, setSalaryData] = useState<any>(null);
   const [salaryStructure, setSalaryStructure] = useState<any>(null);
@@ -313,8 +301,11 @@ export default function SalaryDetailsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      refreshCurrency().catch((error) => {
+        console.error('SalaryDetails currency refresh error:', error);
+      });
       loadEmployee();
-    }, [loadEmployee])
+    }, [loadEmployee, refreshCurrency])
   );
 
   useEffect(() => {
@@ -330,30 +321,19 @@ export default function SalaryDetailsScreen() {
         amount: typeof c.amount === 'number' ? c.amount : parseFloat(c.amount || 0),
       }));
     }
-    // Fallback to static data if API doesn't return components yet
-    return [
-      { label: 'Basic Salary', amount: 4500 },
-      { label: 'House Rent', amount: 1200 },
-      { label: 'Conveyance', amount: 300 },
-      { label: 'Medical', amount: 200 },
-      { label: 'Special', amount: 500 },
-    ];
+    return [];
   }, [salaryData]);
 
   // Derive deductions from salary data
   const deductions = React.useMemo(() => {
-    const deds = salaryData?.deductions || [];
+    const deds = salaryData?.deductions || salaryData?.deductionsList || [];
     if (Array.isArray(deds) && deds.length > 0) {
       return deds.map((d: any) => ({
-        label: d.label || d.name || d.deductionName || 'Deduction',
+        label: d.label || d.name || d.deductionName || d.componentName || 'Deduction',
         amount: typeof d.amount === 'number' ? d.amount : parseFloat(d.amount || 0),
       }));
     }
-    return [
-      { label: 'Provident Fund', amount: 450 },
-      { label: 'Professional Tax', amount: 20 },
-      { label: 'Income Tax', amount: 300 },
-    ];
+    return [];
   }, [salaryData]);
 
   const structureComponents = React.useMemo(() => {
@@ -385,14 +365,6 @@ export default function SalaryDetailsScreen() {
     return grossEarnings - totalDeductions;
   }, [salaryData, grossEarnings, totalDeductions]);
 
-  const radarData = React.useMemo(() => {
-    return earnings.map((e: any) => ({
-      label: e.label.substring(0, 5),
-      value: e.amount || 0,
-      max: Math.max(e.amount * 1.2, 1000),
-    }));
-  }, [earnings]);
-
   const historyChartData = React.useMemo(() => {
     if (!Array.isArray(salaryHistory) || salaryHistory.length === 0) return [];
     return salaryHistory
@@ -421,14 +393,53 @@ export default function SalaryDetailsScreen() {
     return new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   }, [salaryData]);
 
+  const effectiveCurrency = React.useMemo(() => {
+    const candidates = [
+      employee?.company?.currency,
+      employee?.company?.currencyCode,
+      employee?.currency,
+      currency,
+      salaryStructure?.currency,
+      salaryStructure?.currencyCode,
+      salaryData?.currency,
+      salaryData?.currencyCode,
+    ];
+
+    const resolved = candidates.find(
+      (value) => typeof value === 'string' && value.trim().length >= 3,
+    );
+
+    return normalizeCurrencyCode(resolved || 'USD');
+  }, [salaryData, salaryStructure, employee, currency]);
+
   if (loading) {
     return (
-      <SafeAreaView style={[styles.container, styles.centered]} edges={['top', 'left', 'right']}>
+      <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
         <ScreenHeader title="Salary Details" />
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Text variant="medium" size={14} color={colors.text.secondary} style={{ marginTop: 12 }}>
-          Loading salary details...
-        </Text>
+        <View style={styles.loadingWrap}>
+          <View style={styles.loadingHero}>
+            <View style={styles.loadingMonth} />
+            <View style={styles.loadingAmount} />
+            <View style={styles.loadingCaption} />
+            <View style={styles.loadingButton} />
+          </View>
+          <View style={styles.loadingBlock}>
+            <View style={styles.loadingBlockTitle} />
+            <View style={styles.loadingChart} />
+          </View>
+          <View style={styles.loadingBlock}>
+            <View style={styles.loadingBlockTitle} />
+            <View style={styles.loadingRow} />
+            <View style={styles.loadingRow} />
+            <View style={styles.loadingRowShort} />
+          </View>
+          <View style={styles.loadingInline}>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text variant="medium" size={13} color={colors.text.secondary} style={styles.loadingText}>
+              Loading salary structure...
+            </Text>
+          </View>
+        </View>
       </SafeAreaView>
     );
   }
@@ -467,7 +478,7 @@ export default function SalaryDetailsScreen() {
             {currentMonthLabel}
           </Text>
           <Text variant="bold" size={42} color="#FFFFFF" style={styles.netAmount}>
-            {formatCurrency(netSalary)}
+            {formatCurrency(netSalary, effectiveCurrency)}
           </Text>
           <Text variant="medium" size={11} color="rgba(255,255,255,0.6)" style={styles.netLabel}>
             NET SALARY PAYABLE
@@ -492,12 +503,6 @@ export default function SalaryDetailsScreen() {
             style={styles.chartContainer}
           />
         )}
-
-        <CustomRadarChart
-          title="Salary Component Analysis"
-          data={radarData}
-          style={styles.chartContainer}
-        />
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
@@ -567,14 +572,14 @@ export default function SalaryDetailsScreen() {
                         {component.type} · {component.calculationType}
                         {component.calculationType === 'PERCENTAGE'
                           ? ` · ${component.value}%`
-                          : ` · ${formatCurrency(component.value, salaryData?.currency || 'USD')}`}
+                          : ` · ${formatCurrency(component.value, effectiveCurrency)}`}
                         {component.isTaxable ? ' · taxable' : ''}
                       </Text>
                     </View>
                     <Text variant="semibold" size={13} color={colors.text.primary}>
                       {component.calculationType === 'PERCENTAGE'
                         ? `${component.value}%`
-                        : formatCurrency(component.value, salaryData?.currency || 'USD')}
+                        : formatCurrency(component.value, effectiveCurrency)}
                     </Text>
                   </View>
                 ))}
@@ -601,7 +606,7 @@ export default function SalaryDetailsScreen() {
                   {item.label}
                 </Text>
                 <Text variant="semibold" size={13} color={colors.text.primary}>
-                  {formatCurrency(item.amount)}
+                  {formatCurrency(item.amount, effectiveCurrency)}
                 </Text>
               </View>
             ))}
@@ -610,7 +615,7 @@ export default function SalaryDetailsScreen() {
                 Gross Earnings
               </Text>
               <Text variant="bold" size={14} color={colors.success}>
-                {formatCurrency(grossEarnings)}
+                {formatCurrency(grossEarnings, effectiveCurrency)}
               </Text>
             </View>
           </View>
@@ -630,7 +635,7 @@ export default function SalaryDetailsScreen() {
                   {item.label}
                 </Text>
                 <Text variant="semibold" size={13} color={colors.error}>
-                  {formatCurrency(item.amount)}
+                  {formatCurrency(item.amount, effectiveCurrency)}
                 </Text>
               </View>
             ))}
@@ -639,7 +644,7 @@ export default function SalaryDetailsScreen() {
                 Total Deductions
               </Text>
               <Text variant="bold" size={14} color={colors.error}>
-                {formatCurrency(totalDeductions)}
+                {formatCurrency(totalDeductions, effectiveCurrency)}
               </Text>
             </View>
           </View>
@@ -686,6 +691,84 @@ const styles = StyleSheet.create({
   },
   chartContainer: {
     marginBottom: 14,
+  },
+  loadingWrap: {
+    padding: 14,
+    paddingTop: 6,
+  },
+  loadingHero: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 14,
+  },
+  loadingMonth: {
+    width: 92,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginBottom: 14,
+  },
+  loadingAmount: {
+    width: '72%',
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.24)',
+    marginBottom: 10,
+  },
+  loadingCaption: {
+    width: 136,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    marginBottom: 18,
+  },
+  loadingButton: {
+    width: 148,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  loadingBlock: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#EEEEEE',
+    padding: 16,
+    marginBottom: 14,
+  },
+  loadingBlockTitle: {
+    width: 128,
+    height: 12,
+    borderRadius: 999,
+    backgroundColor: '#ECECEC',
+    marginBottom: 14,
+  },
+  loadingChart: {
+    height: 220,
+    borderRadius: 16,
+    backgroundColor: '#F6F6F6',
+  },
+  loadingRow: {
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F7F7F7',
+    marginBottom: 10,
+  },
+  loadingRowShort: {
+    width: '74%',
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#F7F7F7',
+  },
+  loadingInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 6,
+  },
+  loadingText: {
+    marginLeft: 10,
   },
   section: {
     marginBottom: 14,

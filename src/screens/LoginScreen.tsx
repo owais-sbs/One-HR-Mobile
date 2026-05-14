@@ -1,32 +1,53 @@
-import React, { useState } from 'react';
-import { 
-  StyleSheet, 
-  View, 
-  TextInput, 
-  KeyboardAvoidingView, 
+import React, { useState } from "react";
+import {
+  StyleSheet,
+  View,
+  TextInput,
+  KeyboardAvoidingView,
   Platform,
-  ScrollView,
   ActivityIndicator,
-  Alert
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
-import { colors } from '../theme/colors';
-import { Shield } from 'lucide-react-native';
-import { Text } from '../components/ui/Typography';
-import { Button } from '../components/ui/Button';
-import { STORAGE_KEYS, API_ENDPOINTS } from '../config/apiConfig';
-import apiClient from '../api/apiClient';
+  Alert,
+  Image,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
+import { colors } from "../theme/colors";
+import { Text } from "../components/ui/Typography";
+import { Button } from "../components/ui/Button";
+import { STORAGE_KEYS, API_ENDPOINTS } from "../config/apiConfig";
+import apiClient from "../api/apiClient";
+import { getCurrentEmployee } from "../api/employeeService";
+import { getCompanyById } from "../api/companyService";
+import { normalizeEmployeeData } from "../utils/employeeData";
+import { getCurrencySymbol, normalizeCurrencyCode } from "../utils/currency";
+import { useCurrency } from "../context/CurrencyContext";
+import logo from "../assets/onehr-logo.png";
 
 export default function LoginScreen({ navigation }: any) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const { refreshCurrency } = useCurrency();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const getCompanyIdFromToken = (jwtToken?: string) => {
+    if (!jwtToken) return null;
+    try {
+      const [, payload] = jwtToken.split(".");
+      if (!payload) return null;
+      const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+      const decoded = JSON.parse(globalThis.atob(padded));
+      const companyId = decoded?.companyId;
+      return companyId != null ? String(companyId) : null;
+    } catch {
+      return null;
+    }
+  };
 
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Error', 'Please enter email and password');
+      Alert.alert("Error", "Please enter email and password");
       return;
     }
 
@@ -38,7 +59,10 @@ export default function LoginScreen({ navigation }: any) {
       });
 
       if (response.data?.isSuccess === false) {
-        Alert.alert('Error', response.data?.error || response.data?.message || 'Login failed');
+        Alert.alert(
+          "Error",
+          response.data?.error || response.data?.message || "Login failed",
+        );
         setLoading(false);
         return;
       }
@@ -46,27 +70,34 @@ export default function LoginScreen({ navigation }: any) {
       const loginData = response.data?.data;
 
       if (!loginData || !loginData.token) {
-        Alert.alert('Error', 'Invalid login response from server');
+        Alert.alert("Error", "Invalid login response from server");
         setLoading(false);
         return;
       }
 
       const { userId, token, roles } = loginData;
 
-      const hasEmployeeRole = roles && roles.some((r: string) => r.toLowerCase() === 'employee');
+      const hasEmployeeRole =
+        roles && roles.some((r: string) => r.toLowerCase() === "employee");
 
       if (!hasEmployeeRole) {
-        Alert.alert('Error', 'Access denied. You do not have the required employee role.');
+        Alert.alert(
+          "Error",
+          "Access denied. You do not have the required employee role.",
+        );
         setLoading(false);
         return;
       }
 
       // Clear any leftover data from a previous user before storing new credentials
       const allKeys = await AsyncStorage.getAllKeys();
-      const companyCacheKeys = allKeys.filter((k) => k.startsWith(STORAGE_KEYS.COMPANY_DATA));
+      const companyCacheKeys = allKeys.filter((k) =>
+        k.startsWith(STORAGE_KEYS.COMPANY_DATA),
+      );
       await AsyncStorage.multiRemove([
         ...companyCacheKeys,
         STORAGE_KEYS.EMPLOYEE_DATA,
+        STORAGE_KEYS.CURRENCY_DATA,
         STORAGE_KEYS.ATTENDANCE_CACHE,
         STORAGE_KEYS.PROFILE_CACHE,
         STORAGE_KEYS.DEPARTMENT_CACHE,
@@ -81,126 +112,186 @@ export default function LoginScreen({ navigation }: any) {
         [STORAGE_KEYS.USER_ROLES, JSON.stringify(roles)],
       ]);
 
+      try {
+        const employeeResponse = await getCurrentEmployee();
+        const employeeData = normalizeEmployeeData(employeeResponse);
+
+        if (employeeData) {
+          await AsyncStorage.setItem(
+            STORAGE_KEYS.EMPLOYEE_DATA,
+            JSON.stringify(employeeData),
+          );
+
+          const resolvedCompanyId =
+            employeeData.companyId || getCompanyIdFromToken(token);
+
+          if (resolvedCompanyId) {
+            const companyData = await getCompanyById(resolvedCompanyId);
+            const resolvedCurrency = normalizeCurrencyCode(
+              companyData?.currency || companyData?.currencyCode || "",
+            );
+
+            const cacheEntries: [string, string][] = [
+              [STORAGE_KEYS.COMPANY_DATA, JSON.stringify(companyData)],
+              [
+                `${STORAGE_KEYS.COMPANY_DATA}_${resolvedCompanyId}`,
+                JSON.stringify(companyData),
+              ],
+            ];
+
+            if (resolvedCurrency) {
+              cacheEntries.push([
+                STORAGE_KEYS.CURRENCY_DATA,
+                JSON.stringify({
+                  currency: resolvedCurrency,
+                  currencySymbol:
+                    companyData?.currencySymbol ||
+                    getCurrencySymbol(resolvedCurrency),
+                  timestamp: Date.now(),
+                }),
+              ]);
+            }
+
+            await AsyncStorage.multiSet(cacheEntries);
+          }
+        }
+      } catch (bootstrapError) {
+        console.error("Login bootstrap data error:", bootstrapError);
+      }
+
+      await refreshCurrency();
+
       const existingPermission = await Location.getForegroundPermissionsAsync();
-      if (existingPermission.status !== 'granted') {
+      if (existingPermission.status !== "granted") {
         const { status } = await Location.requestForegroundPermissionsAsync();
         await AsyncStorage.setItem(STORAGE_KEYS.LOCATION_PERMISSION, status);
       } else {
-        await AsyncStorage.setItem(STORAGE_KEYS.LOCATION_PERMISSION, 'granted');
+        await AsyncStorage.setItem(STORAGE_KEYS.LOCATION_PERMISSION, "granted");
       }
 
-      navigation.navigate('Main');
+      navigation.navigate("Main");
     } catch (error: any) {
-      console.error('Login error:', error);
-      let message = 'Login failed. Please try again.';
+      console.error("Login error:", error);
+      let message = "Login failed. Please try again.";
       if (error?.response) {
         const serverData = error.response.data;
-        if (typeof serverData === 'string') {
+        if (typeof serverData === "string") {
           message = serverData;
         } else {
-          message = serverData?.error || serverData?.message || `Server error: ${error.response.status}`;
+          message =
+            serverData?.error ||
+            serverData?.message ||
+            `Server error: ${error.response.status}`;
         }
       } else if (error?.request) {
-        message = 'Cannot reach server. Please check your network connection and ensure the backend is running.';
+        message =
+          "Cannot reach server. Please check your network connection and ensure the backend is running.";
       } else if (error?.message) {
         message = error.message;
       }
-      Alert.alert('Login Failed', message);
+      Alert.alert("Login Failed", message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.inner}
       >
-        <ScrollView 
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          centerContent
-        >
+        <View style={styles.content}>
           <View style={styles.header}>
             <View style={styles.logoContainer}>
-              <Shield size={48} color={colors.primary} />
+              <Image source={logo} style={styles.logo} resizeMode="contain" />
             </View>
-            <Text variant="bold" size={32} color={colors.text.primary} style={styles.title}>
-              One HR
-            </Text>
-            <Text variant="regular" size={16} color={colors.text.secondary} align="center">
-              Elevate your workforce management with intelligence.
+            <Text
+              variant="regular"
+              size={13}
+              color={colors.text.secondary}
+              align="center"
+              style={styles.tagline}
+            >
+              Sign in to access your One HR workspace.
             </Text>
           </View>
 
           <View style={styles.form}>
-            <View style={styles.inputGroup}>
-              <Text variant="medium" size={14} color={colors.text.secondary} style={styles.label}>
-                Email Address
-              </Text>
-              <TextInput
-                style={styles.input}
-                placeholder="john@company.com"
-                placeholderTextColor={colors.text.muted}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
+            <Text
+              variant="medium"
+              size={12}
+              color={colors.text.secondary}
+              style={styles.sectionLabel}
+            >
+              Work Account
+            </Text>
+
+            <View style={styles.fieldGroup}>
+              <View style={styles.fieldRow}>
+                <Text
+                  variant="medium"
+                  size={12}
+                  color={colors.text.secondary}
+                  style={styles.label}
+                >
+                  Work Email
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="name@company.com"
+                  placeholderTextColor={colors.text.muted}
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.fieldRow}>
+                <Text
+                  variant="medium"
+                  size={12}
+                  color={colors.text.secondary}
+                  style={styles.label}
+                >
+                  Password
+                </Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter password"
+                  placeholderTextColor={colors.text.muted}
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                />
+              </View>
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text variant="medium" size={14} color={colors.text.secondary} style={styles.label}>
-                Password
-              </Text>
-              <TextInput
-                style={styles.input}
-                placeholder="••••••••"
-                placeholderTextColor={colors.text.muted}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry
-              />
-            </View>
-
-            <View style={styles.forgotContainer}>
-              <Text variant="medium" size={14} color={colors.secondary}>
-                Forgot Password?
-              </Text>
-            </View>
+            <Text
+              variant="medium"
+              size={13}
+              color={colors.secondary}
+              style={styles.forgotText}
+            >
+              Forgot Password?
+            </Text>
 
             <Button
               onPress={handleSignIn}
-              title={loading ? 'Signing In...' : 'Sign In'}
+              title={loading ? "Signing In..." : "Sign In"}
               variant="primary"
               size="lg"
               style={styles.button}
               disabled={loading}
             />
-            {loading && <ActivityIndicator style={styles.loader} color={colors.primary} />}
-
-            <Button
-              onPress={() => {
-                setEmail('employee@onehr.com');
-                setPassword('employee123');
-              }}
-              title="Use Demo Account"
-              variant="ghost"
-              size="sm"
-              style={styles.demoButton}
-            />
+            {loading && (
+              <ActivityIndicator style={styles.loader} color={colors.primary} />
+            )}
           </View>
-
-          <View style={styles.footer}>
-            <Text variant="regular" size={14} color={colors.text.secondary}>
-              Don&apos;t have an account? {' '}
-              <Text variant="bold" size={14} color={colors.primary}>
-                Contact Admin
-              </Text>
-            </Text>
-          </View>
-        </ScrollView>
+        </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -209,74 +300,107 @@ export default function LoginScreen({ navigation }: any) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: "#f8f8f6",
   },
   inner: {
     flex: 1,
   },
-  scrollContent: {
-    flexGrow: 1,
-    padding: 24,
-    justifyContent: 'center',
+  content: {
+    flex: 1,
+    width: "100%",
+    maxWidth: 390,
+    alignSelf: "center",
+    paddingHorizontal: 26,
+    justifyContent: "center",
   },
   header: {
-    alignItems: 'center',
-    marginBottom: 48,
+    alignItems: "center",
+    marginBottom: 34,
   },
   logoContainer: {
-    width: 80,
-    height: 80,
-    borderRadius: 20,
-    backgroundColor: colors.accent.blue,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 20,
-    elevation: 4,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-  },
-  title: {
+    width: "100%",
+    height: 124,
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 12,
   },
-  form: {
-    width: '100%',
+  logo: {
+    width: 276,
+    height: 118,
+    tintColor: "#09090b",
   },
-  inputGroup: {
-    marginBottom: 24,
+  tagline: {
+    maxWidth: 250,
+    lineHeight: 20,
+  },
+  form: {
+    width: "100%",
+  },
+  sectionLabel: {
+    marginBottom: 12,
+    marginLeft: 6,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  fieldGroup: {
+    width: "100%",
+    backgroundColor: "#ffffff",
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#ece9e2",
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.035,
+    shadowRadius: 16,
+    elevation: 1,
+  },
+  fieldRow: {
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 14,
   },
   label: {
-    marginBottom: 10,
-    marginLeft: 4,
+    marginBottom: 7,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#f0ede7",
+    marginLeft: 18,
   },
   input: {
-    height: 56,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 14,
-    paddingHorizontal: 16,
+    width: "100%",
+    height: 26,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
     fontSize: 16,
-    fontFamily: 'Poppins_400Regular',
+    fontFamily: "Poppins_400Regular",
     color: colors.text.primary,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "transparent",
   },
-  forgotContainer: {
-    alignItems: 'flex-end',
-    marginBottom: 32,
-    marginTop: -8,
+  forgotText: {
+    width: "100%",
+    textAlign: "right",
+    marginTop: 14,
+    marginBottom: 24,
+    paddingRight: 4,
   },
   button: {
+    width: "100%",
     borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.1,
+    shadowRadius: 18,
+    elevation: 3,
   },
   loader: {
-    marginTop: 16,
-  },
-  footer: {
-    marginTop: 40,
-    alignItems: 'center',
+    marginTop: 12,
   },
   demoButton: {
-    marginTop: 12,
+    width: "100%",
+    marginTop: 10,
   },
 });

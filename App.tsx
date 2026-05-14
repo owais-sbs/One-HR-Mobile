@@ -1,6 +1,6 @@
 import React, { useEffect, useCallback, useState } from "react";
 import { StatusBar } from "expo-status-bar";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
@@ -8,7 +8,6 @@ import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import {
   Home,
   ClipboardList,
-  DollarSign,
   User,
   Bell,
 } from "lucide-react-native";
@@ -21,7 +20,6 @@ import {
   Poppins_600SemiBold,
   Poppins_700Bold,
 } from "@expo-google-fonts/poppins";
-import { Calendar } from "lucide-react-native";
 // Import Screens
 import LoginScreen from "./src/screens/LoginScreen";
 import DashboardScreen from "./src/screens/DashboardScreen";
@@ -39,12 +37,7 @@ import TeamLeavesScreen from "./src/screens/TeamLeavesScreen";
 import { colors } from "./src/theme/colors";
 import { STORAGE_KEYS } from "./src/config/apiConfig";
 import { initializeNotificationSystem } from "./src/services/notificationService";
-import { getCurrentEmployee } from "./src/api/employeeService";
-import { normalizeEmployeeData } from "./src/utils/employeeData";
-import {
-  formatJoiningDate,
-  hasEmployeeJoined,
-} from "./src/utils/employmentDates";
+import { CurrencyProvider, useCurrency } from "./src/context/CurrencyContext";
 import { Text } from "./src/components/ui/Typography";
 
 // Keep the splash screen visible while we fetch resources
@@ -89,6 +82,8 @@ function ProfileStackScreen() {
 }
 
 function MainTabs() {
+  const { currencySymbol } = useCurrency();
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -126,8 +121,17 @@ function MainTabs() {
         name="Salary"
         component={SalaryDetailsScreen}
         options={{
-          tabBarIcon: ({ color, size }) => (
-            <DollarSign size={size} color={color} />
+          tabBarIcon: ({ color }) => (
+            <View style={styles.currencyTabIcon}>
+              <Text
+                variant="bold"
+                size={18}
+                color={color}
+                style={styles.currencyTabSymbol}
+              >
+                {currencySymbol || "$"}
+              </Text>
+            </View>
           ),
         }}
       />
@@ -149,101 +153,7 @@ function MainTabs() {
   );
 }
 
-function JoiningPendingScreen({ employee }: { employee: any }) {
-  return (
-    <View style={styles.pendingContainer}>
-      <View style={styles.pendingIconWrap}>
-        <Calendar size={28} color="#FFFFFF" />
-      </View>
-      <Text
-        variant="bold"
-        size={30}
-        color="#000000"
-        style={styles.pendingTitle}
-      >
-        Joining Pending
-      </Text>
-      <Text
-        variant="medium"
-        size={15}
-        color={colors.text.secondary}
-        style={styles.pendingText}
-      >
-        Your account is active, but app access will be available after your
-        joining date.
-      </Text>
-      <View style={styles.pendingDateCard}>
-        <Text variant="medium" size={12} color={colors.text.secondary}>
-          Joining Date
-        </Text>
-        <Text
-          variant="bold"
-          size={22}
-          color="#000000"
-          style={styles.pendingDateValue}
-        >
-          {formatJoiningDate(employee)}
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 function MainEntryScreen() {
-  const [loading, setLoading] = useState(true);
-  const [employee, setEmployee] = useState<any>(null);
-  const [employeeHasJoined, setEmployeeHasJoined] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-
-    const loadEmployee = async () => {
-      try {
-        const response = await getCurrentEmployee();
-        const data = normalizeEmployeeData(response);
-
-        if (!mounted) return;
-
-        setEmployee(data);
-        setEmployeeHasJoined(hasEmployeeJoined(data));
-
-        if (data) {
-          await AsyncStorage.setItem(
-            STORAGE_KEYS.EMPLOYEE_DATA,
-            JSON.stringify(data),
-          );
-        }
-      } catch (error) {
-        console.error("Main entry employee check error:", error);
-        if (!mounted) return;
-        setEmployee(null);
-        setEmployeeHasJoined(true);
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
-      }
-    };
-
-    loadEmployee();
-
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  if (loading) {
-    return (
-      <View style={styles.loaderContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  if (!employeeHasJoined) {
-    return <JoiningPendingScreen employee={employee} />;
-  }
-
   return <MainTabs />;
 }
 
@@ -298,68 +208,29 @@ export default function App() {
 
   return (
     <SafeAreaProvider onLayout={onLayoutRootView}>
-      <NavigationContainer>
-        <StatusBar style="auto" />
-        <Stack.Navigator
-          screenOptions={{ headerShown: false }}
-          initialRouteName={isAuthenticated ? "Main" : "Login"}
-        >
-          <Stack.Screen name="Login" component={LoginScreen} />
-          <Stack.Screen name="Main" component={MainEntryScreen} />
-        </Stack.Navigator>
-      </NavigationContainer>
+      <CurrencyProvider>
+        <NavigationContainer>
+          <StatusBar style="auto" />
+          <Stack.Navigator
+            screenOptions={{ headerShown: false }}
+            initialRouteName={isAuthenticated ? "Main" : "Login"}
+          >
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Main" component={MainEntryScreen} />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </CurrencyProvider>
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  loaderContainer: {
-    flex: 1,
+  currencyTabIcon: {
+    minWidth: 24,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F2F2F7",
   },
-  pendingContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#F2F2F7",
-    paddingHorizontal: 24,
-  },
-  pendingIconWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 20,
-  },
-  pendingTitle: {
-    textAlign: "center",
-    marginBottom: 10,
-  },
-  pendingText: {
-    textAlign: "center",
-    maxWidth: 280,
-    lineHeight: 22,
-    marginBottom: 22,
-  },
-  pendingDateCard: {
-    width: "100%",
-    maxWidth: 320,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  pendingDateValue: {
-    marginTop: 6,
+  currencyTabSymbol: {
+    lineHeight: 20,
   },
 });

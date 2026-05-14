@@ -20,6 +20,7 @@ import {
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
+import EmployeeAvatar from '../components/ui/EmployeeAvatar';
 import { STORAGE_KEYS, API_ENDPOINTS, CACHE_TTL } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
 import { normalizeEmployeeData } from '../utils/employeeData';
@@ -51,12 +52,6 @@ const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = tr
   </Pressable>
 );
 
-function getInitials(firstName?: string, lastName?: string) {
-  const f = firstName?.charAt(0) || '';
-  const l = lastName?.charAt(0) || '';
-  return (f + l).toUpperCase() || '??';
-}
-
 function calculateTenure(joiningDate?: string) {
   if (!joiningDate) return '-';
   const start = new Date(joiningDate);
@@ -78,7 +73,6 @@ export default function ProfileScreen({ navigation }: any) {
   const [roles, setRoles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-
   const loadProfile = useCallback(async (forceRefresh = false) => {
     if (forceRefresh) {
       setRefreshing(true);
@@ -301,10 +295,16 @@ export default function ProfileScreen({ navigation }: any) {
       >
         <View style={styles.profileCard}>
           <View style={styles.avatarSection}>
-            <View style={styles.avatar}>
-              <Text variant="bold" size={24} color="#FFFFFF">
-                {getInitials(employee?.firstName, employee?.lastName)}
-              </Text>
+            <View style={{ marginRight: 14 }}>
+              <EmployeeAvatar
+                firstName={employee?.firstName}
+                lastName={employee?.lastName}
+                profileImageUrl={employee?.profileImageUrl}
+                size={56}
+                borderRadius={16}
+                backgroundColor={colors.primary}
+                textColor="#FFFFFF"
+              />
             </View>
             <View style={styles.profileInfo}>
               <Text variant="bold" size={18} color={colors.text.primary}>
@@ -430,15 +430,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 16,
-  },
-  avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
   },
   profileInfo: {
     flex: 1,
