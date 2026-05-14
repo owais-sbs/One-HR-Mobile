@@ -16,7 +16,8 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "icon": "./src/assets/generated/app-icon.png"
+      "icon": "./src/assets/generated/app-icon.png",
+      "bundleIdentifier": "com.kiranloka.onehrmobile"
     },
     "android": {
       "adaptiveIcon": {
