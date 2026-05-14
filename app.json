@@ -40,6 +40,12 @@
           "locationWhenInUsePermission": "Show current location on map."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "31d0778a-0014-4bed-ac94-2932adb0934e"
+      }
+    },
+    "owner": "kiranloka"
   }
 }
