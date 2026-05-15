@@ -6,6 +6,7 @@ import {
   Pressable,
   ActivityIndicator,
 } from 'react-native';
+import { Coffee, LogIn, LogOut } from 'lucide-react-native';
 import { colors } from '../../theme/colors';
 import { Text } from './Typography';
 
@@ -14,10 +15,14 @@ interface ConfirmDialogProps {
   title: string;
   message: string;
   confirmText?: string;
+  confirmSubtext?: string;
   cancelText?: string;
   secondaryText?: string;
+  secondarySubtext?: string;
+  secondaryDestructive?: boolean;
   destructive?: boolean;
   loading?: boolean;
+  loadingAction?: "confirm" | "secondary";
   onConfirm: () => void;
   onCancel: () => void;
   onSecondary?: () => void;
@@ -28,14 +33,85 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   title,
   message,
   confirmText = "Confirm",
+  confirmSubtext,
   cancelText = "Cancel",
   secondaryText,
+  secondarySubtext,
+  secondaryDestructive = false,
   destructive = false,
   loading = false,
+  loadingAction,
   onConfirm,
   onCancel,
   onSecondary,
 }) => {
+  const getActionIcon = (label: string, isDestructive: boolean) => {
+    const normalized = label.toLowerCase();
+    if (normalized.includes("break")) return Coffee;
+    if (normalized.includes("resume") || normalized.includes("clock in")) return LogIn;
+    if (isDestructive || normalized.includes("end") || normalized.includes("clock out")) return LogOut;
+    return LogIn;
+  };
+
+  const renderActionButton = ({
+    label,
+    subtext,
+    onPress,
+    isDestructive,
+    isSecondary,
+    actionKey,
+  }: {
+    label: string;
+    subtext?: string;
+    onPress?: () => void;
+    isDestructive: boolean;
+    isSecondary?: boolean;
+    actionKey: "confirm" | "secondary";
+  }) => {
+    const isActionLoading = loading && loadingAction === actionKey;
+    const Icon = getActionIcon(label, isDestructive);
+    const tintColor = isDestructive
+      ? colors.error
+      : isSecondary
+        ? colors.warning
+        : colors.secondary;
+    const tintBg = isDestructive
+      ? colors.accent.red
+      : isSecondary
+        ? colors.accent.amber
+        : colors.accent.blue;
+
+    return (
+      <Pressable
+        style={({ pressed }) => [
+          styles.actionCard,
+          pressed && styles.actionCardPressed,
+          loading && !isActionLoading && styles.actionCardDisabled,
+        ]}
+        onPress={onPress}
+        disabled={loading}
+      >
+        <View style={[styles.actionIcon, { backgroundColor: tintBg }]}>
+          {isActionLoading ? (
+            <ActivityIndicator color={tintColor} size="small" />
+          ) : (
+            <Icon size={20} color={tintColor} />
+          )}
+        </View>
+        <View style={styles.actionText}>
+          <Text variant="semibold" size={15} color="#0F172A">
+            {label}
+          </Text>
+          {subtext ? (
+            <Text variant="medium" size={12} color="#64748B" style={styles.actionSubtext}>
+              {subtext}
+            </Text>
+          ) : null}
+        </View>
+      </Pressable>
+    );
+  };
+
   return (
     <Modal
       visible={visible}
@@ -47,7 +123,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       <Pressable style={styles.overlay} onPress={onCancel}>
         <Pressable style={styles.dialog} onPress={(e) => e.stopPropagation()}>
           <View style={styles.header}>
-            <Text variant="bold" size={17} color="#0F172A">
+            <Text variant="bold" size={19} color="#0F172A" align="center">
               {title}
             </Text>
           </View>
@@ -57,49 +133,36 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             size={14}
             color="#64748B"
             style={styles.message}
+            align="center"
           >
             {message}
           </Text>
 
           {secondaryText ? (
-            <View style={styles.actionsThree}>
+            <View style={styles.actionsStack}>
+              {renderActionButton({
+                label: confirmText,
+                subtext: confirmSubtext,
+                onPress: onConfirm,
+                isDestructive: destructive,
+                actionKey: "confirm",
+              })}
+              {renderActionButton({
+                label: secondaryText,
+                subtext: secondarySubtext,
+                onPress: onSecondary,
+                isDestructive: secondaryDestructive,
+                isSecondary: true,
+                actionKey: "secondary",
+              })}
               <Pressable
-                style={styles.cancelBtn}
+                style={styles.cancelTextBtn}
                 onPress={onCancel}
                 disabled={loading}
               >
                 <Text variant="semibold" size={15} color="#64748B">
                   {cancelText}
                 </Text>
-              </Pressable>
-              <Pressable
-                style={styles.secondaryBtn}
-                onPress={onSecondary}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text variant="semibold" size={15} color="#FFFFFF">
-                    {secondaryText}
-                  </Text>
-                )}
-              </Pressable>
-              <Pressable
-                style={[
-                  styles.confirmBtn,
-                  destructive && styles.confirmBtnDestructive,
-                ]}
-                onPress={onConfirm}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <Text variant="semibold" size={15} color="#FFFFFF">
-                    {confirmText}
-                  </Text>
-                )}
               </Pressable>
             </View>
           ) : (
@@ -147,25 +210,24 @@ const styles = StyleSheet.create({
   },
   dialog: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 20,
+    borderRadius: 24,
+    padding: 22,
     width: '100%',
-    maxWidth: 320,
+    maxWidth: 360,
   },
   header: {
-    marginBottom: 8,
+    marginBottom: 10,
   },
   message: {
-    lineHeight: 20,
-    marginBottom: 20,
+    lineHeight: 21,
+    marginBottom: 22,
   },
   actions: {
     flexDirection: "row",
     gap: 12,
   },
-  actionsThree: {
-    flexDirection: "row",
-    gap: 8,
+  actionsStack: {
+    gap: 12,
   },
   cancelBtn: {
     flex: 1,
@@ -186,11 +248,41 @@ const styles = StyleSheet.create({
   confirmBtnDestructive: {
     backgroundColor: colors.error,
   },
-  secondaryBtn: {
+  actionCard: {
+    minHeight: 68,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    backgroundColor: "#FFFFFF",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  actionCardPressed: {
+    backgroundColor: "#F8FAFC",
+    transform: [{ scale: 0.99 }],
+  },
+  actionCardDisabled: {
+    opacity: 0.7,
+  },
+  actionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  actionText: {
     flex: 1,
+  },
+  actionSubtext: {
+    marginTop: 2,
+    lineHeight: 17,
+  },
+  cancelTextBtn: {
     height: 44,
-    borderRadius: 12,
-    backgroundColor: "#F59E0B",
     alignItems: "center",
     justifyContent: "center",
   },

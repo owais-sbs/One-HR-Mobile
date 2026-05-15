@@ -77,7 +77,21 @@ function formatTime(dateStr?: string) {
   return dateStr ? formatCompanyTime(dateStr) : "—";
 }
 
-function extractTimeFromDateTime(dateTimeStr?: string) {
+function extractTimeFromDateTime(dateTimeStr?: string, referenceDate = new Date()) {
+  if (!dateTimeStr) return null;
+
+  const timeMatch = dateTimeStr.trim().match(/^(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (timeMatch) {
+    const resolved = new Date(referenceDate);
+    resolved.setHours(
+      Number(timeMatch[1]),
+      Number(timeMatch[2]),
+      Number(timeMatch[3] || 0),
+      0,
+    );
+    return resolved;
+  }
+
   return parseCompanyDateTime(dateTimeStr);
 }
 
@@ -187,13 +201,17 @@ export default function DashboardScreen({ navigation }: any) {
   const [pendingLeaves, setPendingLeaves] = useState(0);
   const [recentLeaves, setRecentLeaves] = useState<any[]>([]);
   const [imageError, setImageError] = useState(false);
+  const [clockLoadingAction, setClockLoadingAction] = useState<"confirm" | "secondary" | undefined>();
   const [clockDialog, setClockDialog] = useState<{
     visible: boolean;
     type: "clockIn" | "clockOut" | "break" | "endDay" | "resumeFromBreak";
     title: string;
     message: string;
     confirmText: string;
+    confirmSubtext?: string;
     secondaryText?: string;
+    secondarySubtext?: string;
+    secondaryDestructive?: boolean;
     destructive: boolean;
     action?: "BREAK" | "END_DAY";
   }>({
@@ -438,6 +456,28 @@ export default function DashboardScreen({ navigation }: any) {
     }
   };
 
+  const refreshAttendanceState = async (fallback?: any) => {
+    try {
+      const [todayResponse, historyResponse] = await Promise.all([
+        apiClient.get(API_ENDPOINTS.ATTENDANCE.TODAY),
+        apiClient.get(API_ENDPOINTS.ATTENDANCE.HISTORY),
+      ]);
+      const todayData = todayResponse.data?.data || null;
+      const historyData = historyResponse.data?.data || historyResponse.data || [];
+
+      setTodayAttendance(todayData);
+      setIsClockedIn(todayData?.status === "CLOCKED_IN" || todayData?.status === "ON_BREAK");
+      setElapsedMs(Math.max(0, Number(todayData?.workedMinutes || 0) * 60_000));
+      setAttendanceHistory(Array.isArray(historyData) ? historyData : []);
+    } catch {
+      if (fallback) {
+        setTodayAttendance(fallback);
+        setIsClockedIn(fallback.status === "CLOCKED_IN" || fallback.status === "ON_BREAK");
+        setElapsedMs(Math.max(0, Number(fallback.workedMinutes || 0) * 60_000));
+      }
+    }
+  };
+
   useFocusEffect(
     useCallback(() => {
       loadDashboardData();
@@ -459,9 +499,7 @@ export default function DashboardScreen({ navigation }: any) {
         );
       const data = response.data?.data;
       if (data) {
-        setTodayAttendance(data);
-        setIsClockedIn(data.status === "CLOCKED_IN" || data.status === "ON_BREAK");
-        setElapsedMs(Math.max(0, Number(data.workedMinutes || 0) * 60_000));
+        await refreshAttendanceState(data);
         refreshNotificationCenter().catch(console.error);
       }
     } catch (error: any) {
@@ -488,9 +526,7 @@ export default function DashboardScreen({ navigation }: any) {
         );
       const data = response.data?.data;
       if (data) {
-        setTodayAttendance(data);
-        setIsClockedIn(data.status === "CLOCKED_IN" || data.status === "ON_BREAK");
-        setElapsedMs(Math.max(0, Number(data.workedMinutes || 0) * 60_000));
+        await refreshAttendanceState(data);
         refreshNotificationCenter().catch(console.error);
       }
     } catch (error: any) {
@@ -519,10 +555,15 @@ export default function DashboardScreen({ navigation }: any) {
       setClockDialog({
         visible: true,
         type: "resumeFromBreak",
-        title: "Resume Work",
-        message: "Continue your day from this break?",
+        title: "Resume or End Day",
+        message: "Resume work from your break or finish for today.",
         confirmText: "Resume Work",
+        confirmSubtext: "Continue tracking time for this session.",
+        secondaryText: "End Day",
+        secondarySubtext: "Close today's attendance from this break.",
+        secondaryDestructive: true,
         destructive: false,
+        action: "END_DAY",
       });
       return;
     }
@@ -554,7 +595,7 @@ export default function DashboardScreen({ navigation }: any) {
 
   const handleClockOut = () => {
     const now = getCurrentCompanyDate(company?.timezone);
-    const endTime = extractTimeFromDateTime(company?.endTime);
+    const endTime = extractTimeFromDateTime(company?.endTime, now);
 
     if (endTime) {
       const latestAllowed = new Date(endTime.getTime() + CLOCK_OUT_GRACE_MS);
@@ -580,16 +621,18 @@ export default function DashboardScreen({ navigation }: any) {
       return;
     }
 
-    const beforeScheduledEnd = endTime ? now < endTime : false;
-    if (beforeScheduledEnd) {
+    const canStartBreak = !endTime || now < endTime;
+    if (canStartBreak) {
       setClockDialog({
         visible: true,
         type: "break",
         title: "Break or End Day",
-        message: "Choose whether to take a break or finish for today.",
+        message: "Choose the action you want to record for this session.",
         confirmText: "End Day",
+        confirmSubtext: "Finish work and close today's attendance.",
         secondaryText: "Start Break",
-        destructive: false,
+        secondarySubtext: "Pause work and keep the day open.",
+        destructive: true,
         action: "END_DAY",
       });
       return;
@@ -607,20 +650,32 @@ export default function DashboardScreen({ navigation }: any) {
   };
 
   const handleConfirmClock = async () => {
-    if (clockDialog.type === "clockIn") {
-      await submitClockIn();
-    } else if (clockDialog.type === "resumeFromBreak") {
-      await submitClockIn();
-    } else if (clockDialog.type === "break") {
-      await submitClockAction("BREAK");
-    } else {
-      await submitClockAction(clockDialog.action);
+    setClockLoadingAction("confirm");
+    try {
+      if (clockDialog.type === "clockIn") {
+        await submitClockIn();
+      } else if (clockDialog.type === "resumeFromBreak") {
+        await submitClockIn();
+      } else if (clockDialog.type === "break") {
+        await submitClockAction(clockDialog.action || "END_DAY");
+      } else {
+        await submitClockAction(clockDialog.action);
+      }
+    } finally {
+      setClockLoadingAction(undefined);
     }
   };
 
   const handleSecondaryClock = async () => {
-    if (clockDialog.type === "break") {
-      await submitClockAction("BREAK");
+    setClockLoadingAction("secondary");
+    try {
+      if (clockDialog.type === "break") {
+        await submitClockAction("BREAK");
+      } else if (clockDialog.type === "resumeFromBreak") {
+        await submitClockAction("END_DAY");
+      }
+    } finally {
+      setClockLoadingAction(undefined);
     }
   };
 
@@ -1035,7 +1090,7 @@ export default function DashboardScreen({ navigation }: any) {
                       {todayAttendance?.status === "CLOCKED_OUT"
                         ? "Day Ended"
                         : todayAttendance?.status === "ON_BREAK"
-                          ? "Resume Work"
+                          ? "Resume / End Day"
                           : isClockedIn ? "Break / End Day" : "Clock In"}
                     </Text>
                   </>
@@ -1282,10 +1337,14 @@ export default function DashboardScreen({ navigation }: any) {
         title={clockDialog.title}
         message={clockDialog.message}
         confirmText={clockDialog.confirmText}
+        confirmSubtext={clockDialog.confirmSubtext}
         secondaryText={clockDialog.secondaryText}
+        secondarySubtext={clockDialog.secondarySubtext}
+        secondaryDestructive={clockDialog.secondaryDestructive}
         cancelText="Cancel"
         destructive={clockDialog.destructive}
         loading={loading}
+        loadingAction={clockLoadingAction}
         onConfirm={handleConfirmClock}
         onSecondary={handleSecondaryClock}
         onCancel={() => setClockDialog((d) => ({ ...d, visible: false }))}
