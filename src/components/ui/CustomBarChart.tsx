@@ -1,10 +1,8 @@
-import React from 'react';
-import { View, StyleSheet, Dimensions, ViewStyle } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, StyleSheet, ViewStyle } from 'react-native';
 import { BarChart } from 'react-native-gifted-charts';
 import { colors } from '../../theme/colors';
 import { Text } from './Typography';
-
-const screenWidth = Dimensions.get('window').width;
 
 interface CustomBarChartProps {
   title: string;
@@ -21,32 +19,44 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
   barColor = colors.secondary,
   style,
 }) => {
-  const chartData = data.map(item => ({
+  const [chartAreaWidth, setChartAreaWidth] = useState(0);
+  const maxVal = data.reduce((max, d) => Math.max(max, d.value), 0);
+  const noOfSections = 4;
+  const computedMaxValue = Math.max(maxVal * 1.2, 8);
+  const stepValue = computedMaxValue / noOfSections;
+
+  const { barWidth, spacing, chartWidth, initialSpacing } = useMemo(() => {
+    const safeWidth = Math.max(chartAreaWidth, 220);
+    const estimatedYAxisWidth = 34;
+    const drawableWidth = Math.max(safeWidth - estimatedYAxisWidth, 160);
+    const barCount = Math.max(data.length, 1);
+    const candidateBarWidth = Math.floor(drawableWidth / (barCount * 2.2));
+    const nextBarWidth = Math.max(14, Math.min(28, candidateBarWidth));
+    const candidateSpacing = Math.floor((drawableWidth - nextBarWidth * barCount) / Math.max(barCount - 1, 1));
+    const nextSpacing = Math.max(8, Math.min(20, candidateSpacing));
+    const nextInitialSpacing = Math.max(8, Math.min(14, nextSpacing));
+    return {
+      barWidth: nextBarWidth,
+      spacing: nextSpacing,
+      chartWidth: safeWidth,
+      initialSpacing: nextInitialSpacing,
+    };
+  }, [chartAreaWidth, data.length]);
+
+  const chartData = data.map((item, index) => ({
     value: item.value,
     label: item.label,
-    frontColor: barColor,
-    gradientColor: barColor + '80', // Add a gradient
-    topLabelComponent: () => (
-      <View style={styles.topLabelContainer}>
-        <Text variant="bold" size={9} color={colors.text.primary}>
-          {item.value}
-        </Text>
-      </View>
-    ),
+    frontColor: item.value > 0 ? barColor : colors.text.muted,
+    topLabelComponent: () =>
+      item.value > 0 ? (
+        <View style={styles.topLabelContainer}>
+          <Text variant="bold" size={9} color={colors.text.primary}>
+            {item.value}
+          </Text>
+        </View>
+      ) : null,
   }));
 
-  const maxVal = Math.max(...data.map(d => d.value));
-  const noOfSections = 4;
-  // GiftedCharts expects: maxValue = noOfSections * stepValue
-  // Use a stable scale so bars don't disappear due to mismatched props.
-  const computedMaxValue = Math.max(
-    12,
-    Math.ceil((Number.isFinite(maxVal) ? maxVal : 0) + 2)
-  );
-  const stepValue = computedMaxValue / noOfSections;
-  // (12*2 from dashboard padding + 18*2 from chart container padding) = 60
-  const chartWidth = screenWidth - 64; 
-  
   return (
     <View style={[styles.container, style]}>
       <View style={styles.header}>
@@ -64,17 +74,22 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
         </View>
       </View>
 
-      <View style={styles.chartArea}>
+      <View
+        style={styles.chartArea}
+        onLayout={(event) => {
+          const nextWidth = Math.floor(event.nativeEvent.layout.width);
+          if (nextWidth > 0 && nextWidth !== chartAreaWidth) {
+            setChartAreaWidth(nextWidth);
+          }
+        }}
+      >
         <BarChart
           data={chartData}
-          frontColor={barColor}
-          barWidth={32}
-          spacing={28}
+          barWidth={barWidth}
+          spacing={spacing}
           roundedTop
-          roundedBottom={false}
-          showGradient
+          roundedBottom
           barBorderRadius={6}
-          minHeight={3}
           hideRules={false}
           rulesType="solid"
           rulesColor={colors.border + '80'}
@@ -92,9 +107,8 @@ export const CustomBarChart: React.FC<CustomBarChartProps> = ({
           animationDuration={800}
           height={140}
           width={chartWidth}
-          initialSpacing={16}
+          initialSpacing={initialSpacing}
           yAxisLabelSuffix={yAxisSuffix}
-          dashGap={0}
           yAxisLabelContainerStyle={{ width: 32 }}
           yAxisSide={0}
         />
@@ -131,8 +145,8 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   chartArea: {
-    alignItems: 'center',
-    marginLeft: -20, // Offset for Y-axis labels
+    width: '100%',
+    alignItems: 'stretch',
   },
   topLabelContainer: {
     marginBottom: 6,

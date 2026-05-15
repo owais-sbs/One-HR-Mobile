@@ -30,6 +30,7 @@ function getHolidayWeekday(dateStr: string) {
 type HolidayItem = {
   id: string;
   name: string;
+  rawDate: string;
   date: string;
   day: string;
   dayNum: string;
@@ -71,6 +72,7 @@ export default function HolidayListScreen({ navigation }: any) {
           return {
             id: String(h.id),
             name: h.name || 'Holiday',
+            rawDate: dateValue,
             date: `${day} ${month} ${y}`,
             day: getHolidayWeekday(dateValue),
             dayNum: day,
@@ -78,15 +80,15 @@ export default function HolidayListScreen({ navigation }: any) {
           };
         })
         .sort((a, b) => {
-          const da = new Date(a.date).getTime();
-          const db = new Date(b.date).getTime();
+          const da = new Date(a.rawDate).getTime();
+          const db = new Date(b.rawDate).getTime();
           return da - db;
         });
 
       setHolidays(mapped);
 
       const years = new Set(mapped.map((h) => {
-        const d = new Date(h.date);
+        const d = new Date(h.rawDate);
         return Number.isNaN(d.getTime()) ? '' : d.getFullYear().toString();
       }));
       const currentYear = new Date().getFullYear().toString();

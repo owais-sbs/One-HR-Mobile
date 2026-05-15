@@ -71,6 +71,7 @@ export default function ProfileScreen({ navigation }: any) {
   const [employee, setEmployee] = useState<any>(null);
   const [department, setDepartment] = useState<string>('');
   const [roles, setRoles] = useState<string[]>([]);
+  const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const loadProfile = useCallback(async (forceRefresh = false) => {
@@ -145,6 +146,16 @@ export default function ProfileScreen({ navigation }: any) {
             } catch (e) {
               // ignore department fetch errors
             }
+          }
+        }
+
+        if (freshEmployee.id) {
+          try {
+            const balancesResponse = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(freshEmployee.id));
+            const balancesData = balancesResponse?.data?.data || balancesResponse?.data || [];
+            setLeaveBalances(Array.isArray(balancesData) ? balancesData : []);
+          } catch (e) {
+            setLeaveBalances([]);
           }
         }
       }
@@ -342,7 +353,10 @@ export default function ProfileScreen({ navigation }: any) {
                 <Award size={14} color={colors.secondary} strokeWidth={2} />
               </View>
               <Text variant="semibold" size={12} color={colors.text.primary}>
-                {employee?.leaveBalance ?? '—'}
+                {(() => {
+                  const total = leaveBalances.reduce((sum, b) => sum + (Number(b.remaining) || 0), 0);
+                  return total > 0 ? total : (employee?.leaveBalance ?? '—');
+                })()}
               </Text>
               <Text variant="regular" size={10} color={colors.text.muted}>Leave Balance</Text>
             </View>

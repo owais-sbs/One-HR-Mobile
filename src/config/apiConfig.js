@@ -2,14 +2,22 @@ function normalizeBaseUrl(url) {
   return url.replace(/\/+$/, "");
 }
 
-const DEFAULT_API_BASE_URL = "https://onehr-backend.duckdns.org/api";
+const ENV_MODE = (process.env.EXPO_PUBLIC_ENV || "local").toLowerCase();
+const LOCAL_BASE_URL = "http://192.168.1.33:8080/api";
+const PROD_BASE_URL = "https://onehr-backend.duckdns.org/api";
+
+const BASE_URL_BY_MODE = {
+  local: LOCAL_BASE_URL,
+  prod: PROD_BASE_URL,
+};
+
 const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
 const RESOLVED_API_BASE_URL = normalizeBaseUrl(
-  configuredBaseUrl || DEFAULT_API_BASE_URL,
+  configuredBaseUrl || BASE_URL_BY_MODE[ENV_MODE] || PROD_BASE_URL,
 );
 
 if (__DEV__) {
-  console.info(`[API CONFIG] Base URL: ${RESOLVED_API_BASE_URL}`);
+  console.info(`[API CONFIG] Mode: ${ENV_MODE} | Base URL: ${RESOLVED_API_BASE_URL}`);
 }
 
 export const API_CONFIG = {

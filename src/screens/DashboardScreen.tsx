@@ -30,6 +30,7 @@ import { StatCard } from "../components/ui/StatCard";
 import { Button } from "../components/ui/Button";
 import { CustomBarChart } from "../components/ui/CustomBarChart";
 import { CustomPieChart } from "../components/ui/CustomPieChart";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { STORAGE_KEYS, API_ENDPOINTS } from "../config/apiConfig";
 import apiClient from "../api/apiClient";
 import { getCurrentEmployee } from "../api/employeeService";
@@ -43,6 +44,12 @@ import {
 } from "../utils/employmentDates";
 import { refreshNotificationCenter } from "../services/notificationService";
 import { getCompanyHolidays } from "../api/holidayService";
+import {
+  formatCompanyDate,
+  formatCompanyTime,
+  getCurrentCompanyDate,
+  parseCompanyDateTime,
+} from "../utils/companyTime";
 
 const { width } = Dimensions.get("window");
 
@@ -67,70 +74,38 @@ function formatDuration(ms: number) {
 }
 
 function formatTime(dateStr?: string) {
-  if (!dateStr) return "—";
-  const d = new Date(dateStr);
-  return d.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return dateStr ? formatCompanyTime(dateStr) : "—";
 }
 
 function extractTimeFromDateTime(dateTimeStr?: string) {
-  if (!dateTimeStr) return null;
-  const match = dateTimeStr.match(/T(\d{2}):(\d{2}):(\d{2})/);
-  const hhmmMatch = dateTimeStr.match(/^(\d{2}):(\d{2})$/);
-  if (hhmmMatch) {
-    const hours = parseInt(hhmmMatch[1], 10);
-    const minutes = parseInt(hhmmMatch[2], 10);
-    const now = new Date();
-    return new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      hours,
-      minutes,
-      0,
-    );
-  }
-  if (!match) {
-    const d = new Date(dateTimeStr);
-    if (isNaN(d.getTime())) return null;
-    return d;
-  }
-  const hours = parseInt(match[1], 10);
-  const minutes = parseInt(match[2], 10);
-  const now = new Date();
-  return new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    hours,
-    minutes,
-    0,
-  );
+  return parseCompanyDateTime(dateTimeStr);
 }
 
 function getDurationHours(inTime?: string, outTime?: string | null) {
   if (!inTime || !outTime) return 0;
-  const start = new Date(inTime).getTime();
-  const end = new Date(outTime).getTime();
+  const start = parseCompanyDateTime(inTime)?.getTime() ?? Number.NaN;
+  const end = parseCompanyDateTime(outTime)?.getTime() ?? Number.NaN;
   if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0;
   return (end - start) / (1000 * 60 * 60);
 }
 
+function getWorkedHours(record?: { workedMinutes?: number | null }) {
+  if (!record) return 0;
+  return Math.max(0, Number(record.workedMinutes || 0)) / 60;
+}
+
 function buildFallbackOutTime(inTime?: string, endTime?: string) {
   if (!inTime || !endTime) return null;
-  const inDate = new Date(inTime);
-  if (Number.isNaN(inDate.getTime())) return null;
+  const inDate = parseCompanyDateTime(inTime);
+  if (!inDate || Number.isNaN(inDate.getTime())) return null;
   const timeMatch = endTime.match(/^(\d{2}):(\d{2})/);
   if (timeMatch) {
     const fallback = new Date(inDate);
     fallback.setHours(Number(timeMatch[1]), Number(timeMatch[2]), 0, 0);
     return fallback.toISOString();
   }
-  const endDate = new Date(endTime);
-  if (!Number.isNaN(endDate.getTime())) return endDate.toISOString();
+  const endDate = parseCompanyDateTime(endTime);
+  if (endDate && !Number.isNaN(endDate.getTime())) return endDate.toISOString();
   return null;
 }
 
@@ -212,24 +187,59 @@ export default function DashboardScreen({ navigation }: any) {
   const [pendingLeaves, setPendingLeaves] = useState(0);
   const [recentLeaves, setRecentLeaves] = useState<any[]>([]);
   const [imageError, setImageError] = useState(false);
+  const [clockDialog, setClockDialog] = useState<{
+    visible: boolean;
+    type: "clockIn" | "clockOut" | "break" | "endDay" | "resumeFromBreak";
+    title: string;
+    message: string;
+    confirmText: string;
+    secondaryText?: string;
+    destructive: boolean;
+    action?: "BREAK" | "END_DAY";
+  }>({
+    visible: false,
+    type: "clockIn",
+    title: "",
+    message: "",
+    confirmText: "Confirm",
+    destructive: false,
+  });
 
   useEffect(() => {
     setImageError(false);
   }, [employee?.profileImageUrl]);
 
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    const timer = setInterval(
+      () => setCurrentTime(getCurrentCompanyDate(company?.timezone)),
+      1000,
+    );
     return () => clearInterval(timer);
-  }, []);
+  }, [company?.timezone]);
 
   useEffect(() => {
-    if (!isClockedIn || !todayAttendance?.inTime) return;
-    const inTime = new Date(todayAttendance.inTime);
-    const updateElapsed = () => setElapsedMs(Date.now() - inTime.getTime());
+    setCurrentTime(getCurrentCompanyDate(company?.timezone));
+  }, [company?.timezone]);
+
+  useEffect(() => {
+    if (!todayAttendance) {
+      setElapsedMs(0);
+      return;
+    }
+
+    const baseMs = Math.max(0, Number(todayAttendance.workedMinutes || 0) * 60_000);
+    if (todayAttendance.status !== "CLOCKED_IN") {
+      setElapsedMs(baseMs);
+      return;
+    }
+
+    const startedAt = Date.now();
+    const updateElapsed = () =>
+      setElapsedMs(baseMs + Math.max(0, Date.now() - startedAt));
     updateElapsed();
     const interval = setInterval(updateElapsed, 1000);
     return () => clearInterval(interval);
-  }, [isClockedIn, todayAttendance]);
+  }, [todayAttendance]);
 
   useEffect(() => {
     if (!isClockedIn || !company?.endTime) return;
@@ -238,7 +248,7 @@ export default function DashboardScreen({ navigation }: any) {
     if (!endTime) return;
 
     const autoCloseTime = new Date(endTime.getTime() + CLOCK_OUT_GRACE_MS);
-    const now = Date.now();
+    const now = getCurrentCompanyDate(company?.timezone).getTime();
 
     if (now >= autoCloseTime.getTime()) {
       setIsClockedIn(false);
@@ -251,7 +261,7 @@ export default function DashboardScreen({ navigation }: any) {
     }, timeoutMs);
 
     return () => clearTimeout(timeout);
-  }, [isClockedIn, company?.endTime]);
+  }, [isClockedIn, company?.endTime, company?.timezone]);
 
   const loadDashboardData = useCallback(async () => {
     try {
@@ -304,12 +314,8 @@ export default function DashboardScreen({ navigation }: any) {
       const data = response.data?.data;
       if (data) {
         setTodayAttendance(data);
-        setIsClockedIn(data.outTime == null);
-        if (data.outTime) {
-          const inTime = new Date(data.inTime).getTime();
-          const outTime = new Date(data.outTime).getTime();
-          setElapsedMs(outTime - inTime);
-        }
+        setIsClockedIn(data.status === "CLOCKED_IN" || data.status === "ON_BREAK");
+        setElapsedMs(Math.max(0, Number(data.workedMinutes || 0) * 60_000));
       } else {
         setTodayAttendance(null);
         setIsClockedIn(false);
@@ -368,7 +374,7 @@ export default function DashboardScreen({ navigation }: any) {
     try {
       const data = await getCompanyHolidays(companyId);
       const list = Array.isArray(data) ? data : [];
-      const now = new Date();
+      const now = getCurrentCompanyDate(company?.timezone);
       now.setHours(0, 0, 0, 0);
 
       const upcoming = list
@@ -378,11 +384,11 @@ export default function DashboardScreen({ navigation }: any) {
           return {
             id: String(h.id),
             name: h.name || "Holiday",
-            date: new Date(dateValue),
+            date: parseCompanyDateTime(dateValue),
             dateStr: dateValue,
           };
         })
-        .filter((h: any) => h.date.getTime() >= now.getTime())
+        .filter((h: any) => h.date && h.date.getTime() >= now.getTime())
         .sort((a: any, b: any) => a.date.getTime() - b.date.getTime())
         .slice(0, 3);
 
@@ -397,23 +403,33 @@ export default function DashboardScreen({ navigation }: any) {
       const response = await apiClient.get(
         API_ENDPOINTS.LEAVE.MY_LEAVES(employeeId),
       );
-      const data = response.data?.data || response.data || [];
-      const list = Array.isArray(data) ? data : [];
+      let list: any[] = [];
+      if (Array.isArray(response.data?.data)) {
+        list = response.data.data;
+      } else if (Array.isArray(response.data)) {
+        list = response.data;
+      } else if (response.data?.data && Array.isArray(response.data.data.result)) {
+        list = response.data.data.result;
+      } else if (response.data?.data?.result && Array.isArray(response.data.data.result)) {
+        list = response.data.data.result;
+      }
 
+      const pendingStatuses = ["PENDING", "OPEN", "PENDING_APPROVAL", 1, "1"];
       const pendingDays = list
-        .filter(
-          (leave: any) => String(leave.status).toUpperCase() === "PENDING",
-        )
+        .filter((leave: any) => {
+          const status = String(leave.status ?? "").toUpperCase();
+          return pendingStatuses.includes(status) || pendingStatuses.includes(leave.status);
+        })
         .reduce(
-          (sum: number, leave: any) => sum + (Number(leave.leaveDays) || 0),
+          (sum: number, leave: any) => sum + (Number(leave.leaveDays || leave.days || leave.totalDays) || 0),
           0,
         );
       setPendingLeaves(pendingDays);
 
       const sorted = [...list].sort(
         (a: any, b: any) =>
-          new Date(b.createdAt || b.startDate).getTime() -
-          new Date(a.createdAt || a.startDate).getTime(),
+          (parseCompanyDateTime(b.createdAt || b.startDate)?.getTime() ?? 0) -
+          (parseCompanyDateTime(a.createdAt || a.startDate)?.getTime() ?? 0),
       );
       setRecentLeaves(sorted.slice(0, 3));
     } catch (error) {
@@ -428,8 +444,90 @@ export default function DashboardScreen({ navigation }: any) {
     }, [loadDashboardData]),
   );
 
+  const submitClockAction = async (action?: "BREAK" | "END_DAY") => {
+    setLoading(true);
+    try {
+      const response = await apiClient.post(
+        API_ENDPOINTS.ATTENDANCE.CLOCK_OUT,
+        null,
+        action ? { params: { action } } : undefined,
+      );
+      if (response.data?.isSuccess === false)
+        return Alert.alert(
+          "Error",
+          response.data?.error || "Clock out failed",
+        );
+      const data = response.data?.data;
+      if (data) {
+        setTodayAttendance(data);
+        setIsClockedIn(data.status === "CLOCKED_IN" || data.status === "ON_BREAK");
+        setElapsedMs(Math.max(0, Number(data.workedMinutes || 0) * 60_000));
+        refreshNotificationCenter().catch(console.error);
+      }
+    } catch (error: any) {
+      Alert.alert(
+        "Error",
+        error?.response?.data?.error ||
+          error?.message ||
+          "Clock out failed",
+      );
+    } finally {
+      setLoading(false);
+      setClockDialog((d) => ({ ...d, visible: false }));
+    }
+  };
+
+  const submitClockIn = async () => {
+    setLoading(true);
+    try {
+      const response = await apiClient.post(API_ENDPOINTS.ATTENDANCE.CLOCK_IN);
+      if (response.data?.isSuccess === false)
+        return Alert.alert(
+          "Error",
+          response.data?.error || "Clock in failed",
+        );
+      const data = response.data?.data;
+      if (data) {
+        setTodayAttendance(data);
+        setIsClockedIn(data.status === "CLOCKED_IN" || data.status === "ON_BREAK");
+        setElapsedMs(Math.max(0, Number(data.workedMinutes || 0) * 60_000));
+        refreshNotificationCenter().catch(console.error);
+      }
+    } catch (error: any) {
+      Alert.alert(
+        "Error",
+        error?.response?.data?.error ||
+          error?.message ||
+          "Clock in failed",
+      );
+    } finally {
+      setLoading(false);
+      setClockDialog((d) => ({ ...d, visible: false }));
+    }
+  };
+
   const handleClockIn = () => {
-    const now = new Date();
+    if (todayAttendance?.status === "CLOCKED_OUT") {
+      Alert.alert(
+        "Day Ended",
+        "This day is already closed. You can clock in again tomorrow.",
+      );
+      return;
+    }
+
+    if (todayAttendance?.status === "ON_BREAK") {
+      setClockDialog({
+        visible: true,
+        type: "resumeFromBreak",
+        title: "Resume Work",
+        message: "Continue your day from this break?",
+        confirmText: "Resume Work",
+        destructive: false,
+      });
+      return;
+    }
+
+    const now = getCurrentCompanyDate(company?.timezone);
     const startTime = extractTimeFromDateTime(company?.startTime);
 
     if (startTime) {
@@ -444,45 +542,18 @@ export default function DashboardScreen({ navigation }: any) {
       }
     }
 
-    Alert.alert("Clock In", "Ready to start your day?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Clock In",
-        onPress: async () => {
-          setLoading(true);
-          try {
-            const response = await apiClient.post(
-              API_ENDPOINTS.ATTENDANCE.CLOCK_IN,
-            );
-            if (response.data?.isSuccess === false)
-              return Alert.alert(
-                "Error",
-                response.data?.error || "Clock in failed",
-              );
-            const data = response.data?.data;
-            if (data) {
-              setTodayAttendance(data);
-              setIsClockedIn(true);
-              setElapsedMs(0);
-              refreshNotificationCenter().catch(console.error);
-            }
-          } catch (error: any) {
-            Alert.alert(
-              "Error",
-              error?.response?.data?.error ||
-                error?.message ||
-                "Clock in failed",
-            );
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ]);
+    setClockDialog({
+      visible: true,
+      type: "clockIn",
+      title: "Clock In",
+      message: "Ready to start your day?",
+      confirmText: "Clock In",
+      destructive: false,
+    });
   };
 
   const handleClockOut = () => {
-    const now = new Date();
+    const now = getCurrentCompanyDate(company?.timezone);
     const endTime = extractTimeFromDateTime(company?.endTime);
 
     if (endTime) {
@@ -496,53 +567,74 @@ export default function DashboardScreen({ navigation }: any) {
       }
     }
 
-    Alert.alert("Clock Out", "Done for the day?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Clock Out",
-        style: "destructive",
-        onPress: async () => {
-          setLoading(true);
-          try {
-            const response = await apiClient.post(
-              API_ENDPOINTS.ATTENDANCE.CLOCK_OUT,
-            );
-            if (response.data?.isSuccess === false)
-              return Alert.alert(
-                "Error",
-                response.data?.error || "Clock out failed",
-              );
-            const data = response.data?.data;
-            if (data) {
-              setTodayAttendance(data);
-              setIsClockedIn(false);
-              setElapsedMs(
-                new Date(data.outTime).getTime() -
-                  new Date(data.inTime).getTime(),
-              );
-              refreshNotificationCenter().catch(console.error);
-            }
-          } catch (error: any) {
-            Alert.alert(
-              "Error",
-              error?.response?.data?.error ||
-                error?.message ||
-                "Clock out failed",
-            );
-          } finally {
-            setLoading(false);
-          }
-        },
-      },
-    ]);
+    if (todayAttendance?.status === "ON_BREAK") {
+      setClockDialog({
+        visible: true,
+        type: "endDay",
+        title: "End Day",
+        message: "Finish the day from your current break?",
+        confirmText: "End Day",
+        destructive: true,
+        action: "END_DAY",
+      });
+      return;
+    }
+
+    const beforeScheduledEnd = endTime ? now < endTime : false;
+    if (beforeScheduledEnd) {
+      setClockDialog({
+        visible: true,
+        type: "break",
+        title: "Break or End Day",
+        message: "Choose whether to take a break or finish for today.",
+        confirmText: "End Day",
+        secondaryText: "Start Break",
+        destructive: false,
+        action: "END_DAY",
+      });
+      return;
+    }
+
+    setClockDialog({
+      visible: true,
+      type: "endDay",
+      title: "Clock Out",
+      message: "Done for the day?",
+      confirmText: "Clock Out",
+      destructive: true,
+      action: "END_DAY",
+    });
   };
 
-  const dateStr = currentTime.toLocaleDateString("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  const handleConfirmClock = async () => {
+    if (clockDialog.type === "clockIn") {
+      await submitClockIn();
+    } else if (clockDialog.type === "resumeFromBreak") {
+      await submitClockIn();
+    } else if (clockDialog.type === "break") {
+      await submitClockAction("BREAK");
+    } else {
+      await submitClockAction(clockDialog.action);
+    }
+  };
+
+  const handleSecondaryClock = async () => {
+    if (clockDialog.type === "break") {
+      await submitClockAction("BREAK");
+    }
+  };
+
+  const dateRangeStr = useMemo(() => {
+    const today = new Date(currentTime);
+    const dayOfWeek = today.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(today);
+    monday.setDate(today.getDate() + mondayOffset);
+    const friday = new Date(monday);
+    friday.setDate(monday.getDate() + 4);
+    const fmt = (d: Date) => d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    return `${fmt(monday)} - ${fmt(friday)}`;
+  }, [currentTime]);
   const timeStr = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -594,11 +686,11 @@ export default function DashboardScreen({ navigation }: any) {
   const combinedAttendanceHistory = useMemo(() => {
     const history = [...attendanceHistory];
     if (todayAttendance?.inTime) {
-      const todayDate = new Date(todayAttendance.inTime);
-      if (!Number.isNaN(todayDate.getTime())) {
+      const todayDate = parseCompanyDateTime(todayAttendance.inTime);
+      if (todayDate && !Number.isNaN(todayDate.getTime())) {
         const filtered = history.filter((item) => {
-          const itemDate = new Date(item.inTime);
-          return Number.isNaN(itemDate.getTime())
+          const itemDate = parseCompanyDateTime(item.inTime);
+          return !itemDate || Number.isNaN(itemDate.getTime())
             ? true
             : !isSameDay(itemDate, todayDate);
         });
@@ -607,9 +699,9 @@ export default function DashboardScreen({ navigation }: any) {
       }
     }
     return history.filter((item) => {
-      const checkIn = new Date(item.inTime);
+      const checkIn = parseCompanyDateTime(item.inTime);
       return (
-        !Number.isNaN(checkIn.getTime()) &&
+        Boolean(checkIn) &&
         isOnOrAfterJoiningDate(checkIn, employee)
       );
     });
@@ -618,9 +710,9 @@ export default function DashboardScreen({ navigation }: any) {
   const monthlyAttendance = useMemo(
     () =>
       combinedAttendanceHistory.filter((item) => {
-        const checkIn = new Date(item.inTime);
+        const checkIn = parseCompanyDateTime(item.inTime);
         return (
-          !Number.isNaN(checkIn.getTime()) && isSameMonth(checkIn, currentTime)
+          Boolean(checkIn) && isSameMonth(checkIn, currentTime)
         );
       }),
     [combinedAttendanceHistory, currentTime],
@@ -629,9 +721,9 @@ export default function DashboardScreen({ navigation }: any) {
   const weeklyAttendance = useMemo(
     () =>
       combinedAttendanceHistory.filter((item) => {
-        const checkIn = new Date(item.inTime);
+        const checkIn = parseCompanyDateTime(item.inTime);
         return (
-          !Number.isNaN(checkIn.getTime()) && isSameWeek(checkIn, currentTime)
+          Boolean(checkIn) && isSameWeek(checkIn, currentTime)
         );
       }),
     [combinedAttendanceHistory, currentTime],
@@ -640,22 +732,24 @@ export default function DashboardScreen({ navigation }: any) {
   const attendanceHoursByWeekday = useMemo(() => {
     return weeklyAttendance.reduce(
       (acc, item) => {
-        const checkIn = new Date(item.inTime);
+        const checkIn = parseCompanyDateTime(item.inTime);
+        if (!checkIn) return acc;
         const weekdayKey = getWeekdayKey(checkIn);
-        const effectiveOut =
-          item.outTime ?? buildFallbackOutTime(item.inTime, company?.endTime);
         acc[weekdayKey] =
-          (acc[weekdayKey] || 0) + getDurationHours(item.inTime, effectiveOut);
+          (acc[weekdayKey] || 0) + getWorkedHours(item);
         return acc;
       },
       {} as Record<string, number>,
     );
-  }, [weeklyAttendance, company]);
+  }, [weeklyAttendance]);
 
   const observedWorkingDayKeys = useMemo(() => {
     const keys = Array.from(
       new Set(
-        weeklyAttendance.map((item) => getWeekdayKey(new Date(item.inTime))),
+        weeklyAttendance
+          .map((item) => parseCompanyDateTime(item.inTime))
+          .filter((item): item is Date => Boolean(item))
+          .map((item) => getWeekdayKey(item)),
       ),
     );
     return keys.sort(
@@ -675,11 +769,10 @@ export default function DashboardScreen({ navigation }: any) {
     value: Number((attendanceHoursByWeekday[dayKey] || 0).toFixed(1)),
   }));
 
-  const monthlyHours = monthlyAttendance.reduce((sum, item) => {
-    const effectiveOut =
-      item.outTime ?? buildFallbackOutTime(item.inTime, company?.endTime);
-    return sum + getDurationHours(item.inTime, effectiveOut);
-  }, 0);
+  const monthlyHours = monthlyAttendance.reduce(
+    (sum, item) => sum + getWorkedHours(item),
+    0,
+  );
 
   const leaveChartData =
     companyLeaveTypes.length > 0
@@ -729,7 +822,7 @@ export default function DashboardScreen({ navigation }: any) {
               color="#64748B"
               style={styles.dateDisplay}
             >
-              {dateStr}
+              {dateRangeStr}
             </Text>
             <Text
               variant="bold"
@@ -858,6 +951,11 @@ export default function DashboardScreen({ navigation }: any) {
                     {formatDuration(elapsedMs)}
                   </Text>
                 </Text>
+                <Text variant="medium" size={12} color="#94A3B8">
+                  {company?.startTime && company?.endTime
+                    ? `${company.startTime.slice(0, 5)} - ${company.endTime.slice(0, 5)}`
+                    : company?.timezone || "Timezone not set"}
+                </Text>
               </View>
 
               {workDurationMs > 0 && (
@@ -900,8 +998,16 @@ export default function DashboardScreen({ navigation }: any) {
               )}
 
               <Pressable
-                onPress={isClockedIn ? handleClockOut : handleClockIn}
-                disabled={loading}
+                onPress={
+                  todayAttendance?.status === "CLOCKED_OUT"
+                    ? undefined
+                    : todayAttendance?.status === "ON_BREAK"
+                      ? handleClockIn
+                      : isClockedIn
+                      ? handleClockOut
+                      : handleClockIn
+                }
+                disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
                 style={[
                   styles.heroButton,
                   isClockedIn
@@ -913,7 +1019,9 @@ export default function DashboardScreen({ navigation }: any) {
                   <ActivityIndicator color="#FFFFFF" />
                 ) : (
                   <>
-                    {isClockedIn ? (
+                    {todayAttendance?.status === "CLOCKED_OUT" ? (
+                      <LogOut size={18} color="#FFFFFF" />
+                    ) : isClockedIn ? (
                       <LogOut size={18} color="#FFFFFF" />
                     ) : (
                       <LogIn size={18} color="#FFFFFF" />
@@ -924,7 +1032,11 @@ export default function DashboardScreen({ navigation }: any) {
                       color="#FFFFFF"
                       style={styles.heroButtonText}
                     >
-                      {isClockedIn ? "Clock Out" : "Clock In"}
+                      {todayAttendance?.status === "CLOCKED_OUT"
+                        ? "Day Ended"
+                        : todayAttendance?.status === "ON_BREAK"
+                          ? "Resume Work"
+                          : isClockedIn ? "Break / End Day" : "Clock In"}
                     </Text>
                   </>
                 )}
@@ -967,7 +1079,7 @@ export default function DashboardScreen({ navigation }: any) {
                   {pendingLeaves}
                 </Text>
                 <Text variant="medium" size={13} color="#64748B">
-                  Pending Leaves
+                  Pending Requests
                 </Text>
               </Pressable>
             </View>
@@ -988,15 +1100,8 @@ export default function DashboardScreen({ navigation }: any) {
                   onPress={() => navigation.navigate("Attendance")}
                   style={styles.bentoCardLarge}
                 >
-                  <Text
-                    variant="semibold"
-                    size={15}
-                    color="#0F172A"
-                    style={styles.chartTitle}
-                  >
-                    Weekly Activity
-                  </Text>
                   <CustomBarChart
+                    title="Weekly Activity"
                     data={
                       weeklyActivityData.length > 0
                         ? weeklyActivityData
@@ -1021,7 +1126,7 @@ export default function DashboardScreen({ navigation }: any) {
                   >
                     Leave Balances
                   </Text>
-                  <CustomPieChart data={leaveChartData} />
+                  <CustomPieChart title="Leave Balances" data={leaveChartData} />
                 </View>
               </View>
             </View>
@@ -1057,9 +1162,7 @@ export default function DashboardScreen({ navigation }: any) {
                       : isRejected
                         ? "#EF4444"
                         : "#F59E0B";
-                    const leaveDateStr = new Date(
-                      leave.startDate,
-                    ).toLocaleDateString("en-US", {
+                    const leaveDateStr = formatCompanyDate(leave.startDate, {
                       month: "short",
                       day: "numeric",
                       year: "numeric",
@@ -1151,7 +1254,7 @@ export default function DashboardScreen({ navigation }: any) {
                           {holiday.name}
                         </Text>
                         <Text variant="medium" size={13} color="#64748B">
-                          {holiday.date.toLocaleDateString("en-US", {
+                          {formatCompanyDate(holiday.date, {
                             day: "numeric",
                             month: "short",
                             year: "numeric",
@@ -1173,6 +1276,20 @@ export default function DashboardScreen({ navigation }: any) {
           </>
         )}
       </ScrollView>
+
+      <ConfirmDialog
+        visible={clockDialog.visible}
+        title={clockDialog.title}
+        message={clockDialog.message}
+        confirmText={clockDialog.confirmText}
+        secondaryText={clockDialog.secondaryText}
+        cancelText="Cancel"
+        destructive={clockDialog.destructive}
+        loading={loading}
+        onConfirm={handleConfirmClock}
+        onSecondary={handleSecondaryClock}
+        onCancel={() => setClockDialog((d) => ({ ...d, visible: false }))}
+      />
     </SafeAreaView>
   );
 }
