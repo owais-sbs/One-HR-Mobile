@@ -1,19 +1,41 @@
+import { NativeModules } from "react-native";
+
 function normalizeBaseUrl(url) {
   return url.replace(/\/+$/, "");
 }
 
+function getPackagerHost() {
+  try {
+    const scriptURL = NativeModules?.SourceCode?.scriptURL;
+    if (!scriptURL || typeof scriptURL !== "string") return null;
+    const url = new URL(scriptURL);
+    return url.hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHost(host) {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function getLocalDevBaseUrl() {
+  const configured = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+  if (configured) return normalizeBaseUrl(configured);
+
+  const host = getPackagerHost();
+  if (host && !isLoopbackHost(host)) {
+    return `http://${host}:8080/api`;
+  }
+
+  return "http://localhost:8080/api";
+}
+
 const ENV_MODE = (process.env.EXPO_PUBLIC_ENV || "local").toLowerCase();
-const LOCAL_BASE_URL = "http://192.168.1.33:8080/api";
 const PROD_BASE_URL = "https://onehr-backend.duckdns.org/api";
 
-const BASE_URL_BY_MODE = {
-  local: LOCAL_BASE_URL,
-  prod: PROD_BASE_URL,
-};
-
-const configuredBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
 const RESOLVED_API_BASE_URL = normalizeBaseUrl(
-  configuredBaseUrl || BASE_URL_BY_MODE[ENV_MODE] || PROD_BASE_URL,
+  ENV_MODE === "prod" ? PROD_BASE_URL : getLocalDevBaseUrl(),
 );
 
 if (__DEV__) {
@@ -115,6 +137,10 @@ export const API_ENDPOINTS = {
     CLOCK_OUT: "/attendance/me/clock-out",
     TODAY: "/attendance/me/today",
     HISTORY: "/attendance/me",
+  },
+  PAYROLL: {
+    MY_DEDUCTION_NOTIFICATIONS: (date) =>
+      `/payroll/me/deduction-notifications${date ? `?date=${date}` : ""}`,
   },
   SUPER_ADMINS: {
     LIST: "/super-admins",

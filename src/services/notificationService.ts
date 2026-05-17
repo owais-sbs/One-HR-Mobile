@@ -7,12 +7,13 @@ import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
 import { getCompanyById } from '../api/companyService';
 import { getCurrentEmployee } from '../api/employeeService';
 import { normalizeEmployeeData } from '../utils/employeeData';
+import { formatCurrency, normalizeCurrencyCode } from '../utils/currency';
 
 function isRunningInExpoGo(): boolean {
   return Constants.appOwnership === 'expo';
 }
 
-export type NotificationCategory = 'leave' | 'attendance' | 'approval' | 'alert';
+export type NotificationCategory = 'leave' | 'attendance' | 'approval' | 'alert' | 'deduction';
 
 export type NotificationRecord = {
   id: string;
@@ -21,10 +22,17 @@ export type NotificationRecord = {
   timeLabel: string;
   read: boolean;
   category: NotificationCategory;
-  source: 'leave' | 'attendance';
+  source: 'leave' | 'attendance' | 'payroll';
   createdAt: string;
   scheduledFor?: string;
   sourceId?: string;
+  amount?: number;
+  currency?: string;
+  eventDate?: string;
+  reasonType?: 'LATE_ARRIVAL' | 'HALF_DAY' | 'LEAVE' | string;
+  occurrenceCount?: number;
+  occurrencesBeforeDeduction?: number;
+  deductionApplied?: boolean;
 };
 
 type EmployeeData = {
@@ -53,9 +61,29 @@ type AttendanceRecord = {
   outTime?: string | null;
 };
 
+type DeductionNotificationItem = {
+  type?: 'LATE_ARRIVAL' | 'HALF_DAY' | 'LEAVE' | string;
+  title?: string;
+  message?: string;
+  amount?: number;
+  occurrenceCount?: number;
+  occurrencesBeforeDeduction?: number;
+  deductionApplied?: boolean;
+};
+
+type DeductionNotificationResponse = {
+  employeeId?: number;
+  date?: string;
+  dayEnded?: boolean;
+  currency?: string;
+  totalDeduction?: number;
+  items?: DeductionNotificationItem[];
+};
+
 const NOTIFICATION_STORAGE_KEY = '@onehr.notifications.v1';
 const NOTIFICATION_SCHEDULE_KEY = '@onehr.notifications.scheduled.v1';
 const NOTIFICATION_WINDOW_DAYS = 7;
+const DEDUCTION_LOOKBACK_DAYS = 3;
 const REMINDER_OFFSET_MINUTES = 5;
 
 let bootstrapComplete = false;
@@ -269,6 +297,24 @@ async function scheduleLocalNotification(title: string, body: string, fireDate: 
   }
 }
 
+async function presentLocalNotification(title: string, body: string, data: Record<string, string>) {
+  if (isRunningInExpoGo()) return null;
+  try {
+    return await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+        data,
+        sound: true,
+      },
+      trigger: null,
+    });
+  } catch (error) {
+    console.error('Present local notification error:', error);
+    return null;
+  }
+}
+
 async function scheduleAttendanceReminders(
   company: CompanyData,
   leaves: LeaveRecord[],
@@ -392,6 +438,79 @@ async function buildLeaveNotifications(leaves: LeaveRecord[]) {
     });
 }
 
+function getRecentDateKeys(days: number) {
+  const now = new Date();
+  const keys: string[] = [];
+
+  for (let index = 0; index < days; index += 1) {
+    const date = new Date(now);
+    date.setDate(now.getDate() - index);
+    keys.push(getDateKey(date));
+  }
+
+  return keys;
+}
+
+function formatDeductionAmount(amount?: number, currency?: string) {
+  const value = Number(amount || 0);
+  if (value <= 0) return '';
+  return formatCurrency(value, normalizeCurrencyCode(currency || 'USD'));
+}
+
+async function fetchDeductionNotificationData() {
+  const dateKeys = getRecentDateKeys(DEDUCTION_LOOKBACK_DAYS);
+  const responses = await Promise.all(
+    dateKeys.map((dateKey) =>
+      apiClient
+        .get(API_ENDPOINTS.PAYROLL.MY_DEDUCTION_NOTIFICATIONS(dateKey))
+        .then((response) => response?.data?.data || response?.data || null)
+        .catch(() => null)
+    )
+  );
+
+  return responses.filter(Boolean) as DeductionNotificationResponse[];
+}
+
+function buildDeductionNotifications(responses: DeductionNotificationResponse[]) {
+  const now = new Date().toISOString();
+  const records: NotificationRecord[] = [];
+
+  responses.forEach((response) => {
+    if (!response?.dayEnded || !Array.isArray(response.items) || response.items.length === 0) {
+      return;
+    }
+
+    response.items.forEach((item) => {
+      if (!item?.type) return;
+      const amountLabel = formatDeductionAmount(item.amount, response.currency);
+      const amountSuffix = item.deductionApplied && amountLabel ? ` Deduction: ${amountLabel}.` : '';
+      const subtitle = `${item.message || 'Payroll deduction event recorded.'}${amountSuffix}`;
+      const createdAt = response.date ? `${response.date}T23:59:00` : now;
+
+      records.push({
+        id: `deduction:${response.employeeId || 'me'}:${response.date || getDateKey(new Date())}:${item.type}`,
+        title: item.title || 'Payroll Deduction',
+        subtitle,
+        timeLabel: buildNotificationTimeLabel(createdAt),
+        read: false,
+        category: 'deduction',
+        source: 'payroll',
+        createdAt,
+        sourceId: `${response.date || getDateKey(new Date())}:${item.type}`,
+        amount: Number(item.amount || 0),
+        currency: response.currency,
+        eventDate: response.date,
+        reasonType: item.type,
+        occurrenceCount: item.occurrenceCount,
+        occurrencesBeforeDeduction: item.occurrencesBeforeDeduction,
+        deductionApplied: Boolean(item.deductionApplied),
+      });
+    });
+  });
+
+  return records;
+}
+
 async function getEmployeeContext() {
   const cached = await AsyncStorage.getItem(STORAGE_KEYS.EMPLOYEE_DATA);
   let employee: EmployeeData | null = cached ? normalizeEmployeeData(JSON.parse(cached)) : null;
@@ -462,17 +581,22 @@ export async function initializeNotificationSystem() {
     Notifications.addNotificationReceivedListener(async (notification) => {
       const data = (notification.request.content.data || {}) as Record<string, string>;
       const now = new Date().toISOString();
-      const type = data.type === 'leave' ? 'approval' : 'attendance';
+      const category: NotificationCategory =
+        data.notificationType === 'deduction' || data.type === 'payroll'
+          ? 'deduction'
+          : data.type === 'leave' ? 'approval' : 'attendance';
       const record: NotificationRecord = {
-        id: data.reminder ? `${data.type}:${data.reminder}:${data.reminderDate || now}` : `push:${notification.request.identifier}`,
+        id: data.recordId || (data.reminder ? `${data.type}:${data.reminder}:${data.reminderDate || now}` : `push:${notification.request.identifier}`),
         title: notification.request.content.title || 'Notification',
         subtitle: notification.request.content.body || '',
         timeLabel: buildNotificationTimeLabel(now),
         read: false,
-        category: type,
-        source: type === 'approval' ? 'leave' : 'attendance',
+        category,
+        source: category === 'approval' ? 'leave' : category === 'deduction' ? 'payroll' : 'attendance',
         createdAt: now,
         sourceId: notification.request.identifier,
+        eventDate: data.eventDate,
+        reasonType: data.reasonType,
       };
 
       await mergeNotificationRecords([record]);
@@ -483,10 +607,6 @@ export async function initializeNotificationSystem() {
 }
 
 export async function refreshNotificationCenter() {
-  if (isRunningInExpoGo()) {
-    return [];
-  }
-
   try {
     const employee = await getEmployeeContext();
     if (!employee?.id) {
@@ -497,6 +617,7 @@ export async function refreshNotificationCenter() {
     const { attendance, leaves } = await fetchAttendanceLeaveData(employee.id);
 
     const leaveNotifications = await buildLeaveNotifications(leaves);
+    const deductionNotifications = buildDeductionNotifications(await fetchDeductionNotificationData());
     await clearScheduledNotifications();
     const attendanceNotifications = company?.startTime || company?.endTime
       ? await scheduleAttendanceReminders(company, leaves, attendance)
@@ -505,8 +626,26 @@ export async function refreshNotificationCenter() {
     const existing = await getStoredNotifications();
     const preserved = existing.filter((record) => !record.id.startsWith('attendance:clock-'));
     await saveStoredNotifications(preserved);
+    const existingIds = new Set(preserved.map((record) => record.id));
+    const newDeductionNotifications = deductionNotifications.filter((record) => !existingIds.has(record.id));
 
-    const records = await mergeNotificationRecords([...leaveNotifications, ...attendanceNotifications]);
+    const records = await mergeNotificationRecords([
+      ...leaveNotifications,
+      ...attendanceNotifications,
+      ...deductionNotifications,
+    ]);
+
+    await Promise.all(
+      newDeductionNotifications.map((record) =>
+        presentLocalNotification(record.title, record.subtitle, {
+          type: 'payroll',
+          notificationType: 'deduction',
+          recordId: record.id,
+          reasonType: String(record.reasonType || ''),
+          eventDate: record.eventDate || '',
+        })
+      )
+    );
 
     return records;
   } catch (error) {

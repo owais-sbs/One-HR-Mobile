@@ -20,6 +20,7 @@ import {
   LogOut,
   UserCheck,
   Clock,
+  Coffee,
   FileText,
   CheckCircle,
   XCircle,
@@ -150,6 +151,32 @@ function isSameDay(left: Date, right: Date) {
   );
 }
 
+function isDateWithinHoliday(date: Date, holiday: any) {
+  if (!holiday || holiday.isdeleted || holiday.isactive === false) return false;
+
+  const start = parseCompanyDateTime(holiday.startDate || holiday.dateStr || holiday.date);
+  const end = parseCompanyDateTime(
+    holiday.endDate || holiday.startDate || holiday.dateStr || holiday.date,
+  );
+  if (!start || !end) return false;
+
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  const target = new Date(date);
+  target.setHours(0, 0, 0, 0);
+
+  return target >= start && target <= end;
+}
+
+function formatBreakMinutes(minutes: number) {
+  const safeMinutes = Math.max(0, Math.floor(minutes));
+  const hours = Math.floor(safeMinutes / 60);
+  const mins = safeMinutes % 60;
+  if (hours <= 0) return `${mins}m`;
+  if (mins <= 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
+}
+
 function daysUntil(date: Date, referenceDate: Date) {
   const start = new Date(referenceDate);
   const end = new Date(date);
@@ -198,6 +225,7 @@ export default function DashboardScreen({ navigation }: any) {
   const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
   const [companyLeaveTypes, setCompanyLeaveTypes] = useState<LeaveType[]>([]);
   const [upcomingHolidays, setUpcomingHolidays] = useState<any[]>([]);
+  const [companyHolidays, setCompanyHolidays] = useState<any[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState(0);
   const [recentLeaves, setRecentLeaves] = useState<any[]>([]);
   const [imageError, setImageError] = useState(false);
@@ -392,6 +420,7 @@ export default function DashboardScreen({ navigation }: any) {
     try {
       const data = await getCompanyHolidays(companyId);
       const list = Array.isArray(data) ? data : [];
+      setCompanyHolidays(list);
       const now = getCurrentCompanyDate(company?.timezone);
       now.setHours(0, 0, 0, 0);
 
@@ -413,6 +442,7 @@ export default function DashboardScreen({ navigation }: any) {
       setUpcomingHolidays(upcoming);
     } catch (error) {
       setUpcomingHolidays([]);
+      setCompanyHolidays([]);
     }
   };
 
@@ -552,19 +582,7 @@ export default function DashboardScreen({ navigation }: any) {
     }
 
     if (todayAttendance?.status === "ON_BREAK") {
-      setClockDialog({
-        visible: true,
-        type: "resumeFromBreak",
-        title: "Resume or End Day",
-        message: "Resume work from your break or finish for today.",
-        confirmText: "Resume Work",
-        confirmSubtext: "Continue tracking time for this session.",
-        secondaryText: "End Day",
-        secondarySubtext: "Close today's attendance from this break.",
-        secondaryDestructive: true,
-        destructive: false,
-        action: "END_DAY",
-      });
+      handleResumeWork();
       return;
     }
 
@@ -593,6 +611,31 @@ export default function DashboardScreen({ navigation }: any) {
     });
   };
 
+  const handleTakeBreak = () => {
+    setClockDialog({
+      visible: true,
+      type: "break",
+      title: "Take Break",
+      message: `You have ${formatBreakMinutes(remainingBreakMinutes)} of break time remaining today.`,
+      confirmText: "Continue",
+      confirmSubtext: "Start a break and keep today's attendance open.",
+      destructive: false,
+      action: "BREAK",
+    });
+  };
+
+  const handleResumeWork = () => {
+    setClockDialog({
+      visible: true,
+      type: "resumeFromBreak",
+      title: "Resume Work",
+      message: "Continue tracking work time for this session.",
+      confirmText: "Resume Work",
+      confirmSubtext: "Continue tracking time for this session.",
+      destructive: false,
+    });
+  };
+
   const handleClockOut = () => {
     const now = getCurrentCompanyDate(company?.timezone);
     const endTime = extractTimeFromDateTime(company?.endTime, now);
@@ -600,50 +643,21 @@ export default function DashboardScreen({ navigation }: any) {
     if (endTime) {
       const latestAllowed = new Date(endTime.getTime() + CLOCK_OUT_GRACE_MS);
       if (now > latestAllowed) {
+        refreshAttendanceState().catch(console.error);
         Alert.alert(
-          "Too Late",
-          "Clock out is no longer allowed. Your session will be closed automatically.",
+          "Day Ended",
+          "Clock out is no longer allowed. Your session will be closed automatically at the scheduled end time.",
         );
         return;
       }
     }
 
-    if (todayAttendance?.status === "ON_BREAK") {
-      setClockDialog({
-        visible: true,
-        type: "endDay",
-        title: "End Day",
-        message: "Finish the day from your current break?",
-        confirmText: "End Day",
-        destructive: true,
-        action: "END_DAY",
-      });
-      return;
-    }
-
-    const canStartBreak = !endTime || now < endTime;
-    if (canStartBreak) {
-      setClockDialog({
-        visible: true,
-        type: "break",
-        title: "Break or End Day",
-        message: "Choose the action you want to record for this session.",
-        confirmText: "End Day",
-        confirmSubtext: "Finish work and close today's attendance.",
-        secondaryText: "Start Break",
-        secondarySubtext: "Pause work and keep the day open.",
-        destructive: true,
-        action: "END_DAY",
-      });
-      return;
-    }
-
     setClockDialog({
       visible: true,
       type: "endDay",
-      title: "Clock Out",
-      message: "Done for the day?",
-      confirmText: "Clock Out",
+      title: "End Day",
+      message: "Do you want to end the day?",
+      confirmText: "Yes, End Day",
       destructive: true,
       action: "END_DAY",
     });
@@ -657,7 +671,7 @@ export default function DashboardScreen({ navigation }: any) {
       } else if (clockDialog.type === "resumeFromBreak") {
         await submitClockIn();
       } else if (clockDialog.type === "break") {
-        await submitClockAction(clockDialog.action || "END_DAY");
+        await submitClockAction(clockDialog.action || "BREAK");
       } else {
         await submitClockAction(clockDialog.action);
       }
@@ -713,6 +727,13 @@ export default function DashboardScreen({ navigation }: any) {
     workDurationMs > 0
       ? Math.min(100, Math.round((elapsedMs / workDurationMs) * 100))
       : 0;
+  const canTakeBreak = !workEndTime || currentTime < workEndTime;
+  const allowedBreakMinutes = Math.max(
+    0,
+    Number(todayAttendance?.allowedBreakMinutes ?? company?.breakDuration ?? 0),
+  );
+  const usedBreakMinutes = Math.max(0, Number(todayAttendance?.totalBreakMinutes || 0));
+  const remainingBreakMinutes = Math.max(0, allowedBreakMinutes - usedBreakMinutes);
 
   const configuredWorkingDayKeys = useMemo(
     () =>
@@ -737,6 +758,16 @@ export default function DashboardScreen({ navigation }: any) {
     () => (joiningDate ? daysUntil(joiningDate, currentTime) : 0),
     [joiningDate, currentTime],
   );
+  const todayWeekdayKey = getWeekdayKey(currentTime);
+  const hasWorkingDayConfig = Boolean(company?.workingDays)
+    && Object.keys(company.workingDays).some((day) => WORKING_DAY_ORDER.includes(day.toLowerCase()));
+  const isConfiguredDayOff = hasWorkingDayConfig
+    ? !configuredWorkingDayKeys.includes(todayWeekdayKey)
+    : false;
+  const todayHoliday = companyHolidays.find((holiday) =>
+    isDateWithinHoliday(currentTime, holiday),
+  );
+  const isTodayDayOff = isConfiguredDayOff || Boolean(todayHoliday);
 
   const combinedAttendanceHistory = useMemo(() => {
     const history = [...attendanceHistory];
@@ -962,7 +993,7 @@ export default function DashboardScreen({ navigation }: any) {
                     ]}
                   />
                   <Text variant="medium" size={12} color="#94A3B8">
-                    {isClockedIn ? "Clocked In" : "Off the clock"}
+                    {isTodayDayOff ? "Day Off" : isClockedIn ? "Clocked In" : "Off the clock"}
                   </Text>
                 </View>
                 {company && workStartTime && workEndTime && (
@@ -1052,50 +1083,90 @@ export default function DashboardScreen({ navigation }: any) {
                 </View>
               )}
 
-              <Pressable
-                onPress={
-                  todayAttendance?.status === "CLOCKED_OUT"
-                    ? undefined
-                    : todayAttendance?.status === "ON_BREAK"
-                      ? handleClockIn
-                      : isClockedIn
-                      ? handleClockOut
-                      : handleClockIn
-                }
-                disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
-                style={[
-                  styles.heroButton,
-                  isClockedIn
-                    ? styles.heroButtonDanger
-                    : styles.heroButtonPrimary,
-                ]}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <>
-                    {todayAttendance?.status === "CLOCKED_OUT" ? (
-                      <LogOut size={18} color="#FFFFFF" />
-                    ) : isClockedIn ? (
-                      <LogOut size={18} color="#FFFFFF" />
-                    ) : (
-                      <LogIn size={18} color="#FFFFFF" />
-                    )}
-                    <Text
-                      variant="semibold"
-                      size={16}
-                      color="#FFFFFF"
-                      style={styles.heroButtonText}
-                    >
-                      {todayAttendance?.status === "CLOCKED_OUT"
-                        ? "Day Ended"
-                        : todayAttendance?.status === "ON_BREAK"
-                          ? "Resume / End Day"
-                          : isClockedIn ? "Break / End Day" : "Clock In"}
+              {isTodayDayOff ? (
+                <View style={styles.dayOffPanel}>
+                  <Calendar size={18} color="#CBD5E1" />
+                  <View style={styles.dayOffText}>
+                    <Text variant="bold" size={16} color="#FFFFFF">
+                      Day Off
                     </Text>
-                  </>
-                )}
-              </Pressable>
+                    <Text variant="medium" size={12} color="#94A3B8">
+                      {todayHoliday?.name ||
+                        `${WORKING_DAY_LABELS[todayWeekdayKey] || todayWeekdayKey.toUpperCase()} is not a configured working day.`}
+                    </Text>
+                  </View>
+                </View>
+              ) : todayAttendance?.status === "ON_BREAK" ? (
+                <View style={styles.actionRow}>
+                  <Pressable
+                    onPress={handleResumeWork}
+                    disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
+                    style={[styles.actionButton, styles.actionButtonLight]}
+                  >
+                    <LogIn size={18} color="#0F172A" />
+                    <Text variant="semibold" size={14} color="#0F172A">
+                      Resume Work
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={handleClockOut}
+                    disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
+                    style={[styles.actionButton, styles.actionButtonDanger]}
+                  >
+                    <LogOut size={18} color="#FFFFFF" />
+                    <Text variant="semibold" size={14} color="#FFFFFF">
+                      Clock Out
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : isClockedIn ? (
+                <View style={styles.actionRow}>
+                  {canTakeBreak && (
+                    <Pressable
+                      onPress={handleTakeBreak}
+                      disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
+                      style={[styles.actionButton, styles.actionButtonLight]}
+                    >
+                      <Coffee size={18} color="#0F172A" />
+                      <Text variant="semibold" size={14} color="#0F172A">
+                        Take Break
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Pressable
+                    onPress={handleClockOut}
+                    disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
+                    style={[styles.actionButton, styles.actionButtonDanger]}
+                  >
+                    <LogOut size={18} color="#FFFFFF" />
+                    <Text variant="semibold" size={14} color="#FFFFFF">
+                      Clock Out
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  onPress={handleClockIn}
+                  disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
+                  style={[styles.heroButton, styles.heroButtonPrimary]}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <LogIn size={18} color="#FFFFFF" />
+                      <Text
+                        variant="semibold"
+                        size={16}
+                        color="#FFFFFF"
+                        style={styles.heroButtonText}
+                      >
+                        Clock In
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
             </View>
 
             {/* Quick Stats Grid - Side by Side */}
@@ -1498,6 +1569,41 @@ const styles = StyleSheet.create({
   },
   heroButtonText: {
     letterSpacing: 0.3,
+  },
+  actionRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  actionButton: {
+    flex: 1,
+    minHeight: 54,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  actionButtonLight: {
+    backgroundColor: "#FFFFFF",
+  },
+  actionButtonDanger: {
+    backgroundColor: "#EF4444",
+  },
+  dayOffPanel: {
+    minHeight: 68,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+  },
+  dayOffText: {
+    flex: 1,
+    gap: 3,
   },
 
   // Stats Grid Row

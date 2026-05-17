@@ -2,11 +2,12 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { Bell, Calendar, Clock, CheckCircle, AlertCircle } from 'lucide-react-native';
+import { Bell, Calendar, Clock, CheckCircle, AlertCircle, TrendingDown } from 'lucide-react-native';
 import { colors } from '../theme/colors';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { EmptyState } from '../components/ui/EmptyState';
+import { formatCurrency } from '../utils/currency';
 import {
   loadNotificationCenter,
   markAllNotificationsRead,
@@ -28,6 +29,8 @@ const getNotificationIcon = (category: NotificationCategory) => {
       return { icon: CheckCircle, bgColor: '#F0FDF4', iconColor: '#16a34a' };
     case 'alert':
       return { icon: AlertCircle, bgColor: '#FEF2F2', iconColor: '#dc2626' };
+    case 'deduction':
+      return { icon: TrendingDown, bgColor: '#FEF2F2', iconColor: '#dc2626' };
     default:
       return { icon: Bell, bgColor: '#F4F4F5', iconColor: '#71717a' };
   }
@@ -47,6 +50,14 @@ const NotificationItemRow = ({
   onPress: (id: string) => void;
 }) => {
   const { icon: IconComponent, bgColor, iconColor } = getNotificationIcon(item.category);
+  const amountLabel =
+    item.source === 'payroll' && item.deductionApplied && Number(item.amount || 0) > 0
+      ? formatCurrency(Number(item.amount || 0), item.currency || 'USD')
+      : null;
+  const occurrenceLabel =
+    item.reasonType === 'LATE_ARRIVAL' && item.occurrenceCount != null && item.occurrencesBeforeDeduction != null
+      ? `${item.occurrenceCount}/${item.occurrencesBeforeDeduction}`
+      : null;
 
   return (
     <Pressable
@@ -73,6 +84,24 @@ const NotificationItemRow = ({
         <Text variant="regular" size={13} color={colors.text.secondary} numberOfLines={2} style={styles.subtitle}>
           {item.subtitle}
         </Text>
+        {(amountLabel || occurrenceLabel) && (
+          <View style={styles.metaRow}>
+            {amountLabel && (
+              <View style={styles.amountPill}>
+                <Text variant="semibold" size={10} color={colors.error}>
+                  {amountLabel}
+                </Text>
+              </View>
+            )}
+            {occurrenceLabel && (
+              <View style={styles.occurrencePill}>
+                <Text variant="semibold" size={10} color="#B45309">
+                  Late {occurrenceLabel}
+                </Text>
+              </View>
+            )}
+          </View>
+        )}
       </View>
     </Pressable>
   );
@@ -141,7 +170,7 @@ export default function NotificationScreen() {
       <ScreenHeader title="Notifications" />
       <View style={styles.actionsRow}>
         <Text variant="medium" size={12} color={colors.text.muted}>
-          Attendance reminders and leave updates
+          Attendance, leave, and payroll deduction updates
         </Text>
         <Pressable
           onPress={handleMarkAllRead}
@@ -274,5 +303,24 @@ const styles = StyleSheet.create({
   subtitle: {
     lineHeight: 16,
   },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  amountPill: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: '#FEF2F2',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  occurrencePill: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    backgroundColor: '#FFFBEB',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
 });
-
