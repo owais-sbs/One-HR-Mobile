@@ -12,9 +12,17 @@ import { STORAGE_KEYS } from '../config/apiConfig';
 import { getCurrentEmployee } from '../api/employeeService';
 import { normalizeEmployeeData } from '../utils/employeeData';
 
+function parseDateOnly(value?: string) {
+  if (!value) return null;
+  const dateKey = value.split('T')[0];
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+}
+
 function formatHolidayDate(dateStr: string) {
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return { day: '—', month: '—', year: '' };
+  const date = parseDateOnly(dateStr);
+  if (!date || Number.isNaN(date.getTime())) return { day: '—', month: '—', year: '' };
   const day = date.getDate().toString().padStart(2, '0');
   const month = date.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
   const year = date.getFullYear().toString();
@@ -22,8 +30,8 @@ function formatHolidayDate(dateStr: string) {
 }
 
 function getHolidayWeekday(dateStr: string) {
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return '';
+  const date = parseDateOnly(dateStr);
+  if (!date || Number.isNaN(date.getTime())) return '';
   return date.toLocaleDateString('en-US', { weekday: 'long' });
 }
 
@@ -80,16 +88,16 @@ export default function HolidayListScreen({ navigation }: any) {
           };
         })
         .sort((a, b) => {
-          const da = new Date(a.rawDate).getTime();
-          const db = new Date(b.rawDate).getTime();
+          const da = parseDateOnly(a.rawDate)?.getTime() ?? 0;
+          const db = parseDateOnly(b.rawDate)?.getTime() ?? 0;
           return da - db;
         });
 
       setHolidays(mapped);
 
       const years = new Set(mapped.map((h) => {
-        const d = new Date(h.rawDate);
-        return Number.isNaN(d.getTime()) ? '' : d.getFullYear().toString();
+        const d = parseDateOnly(h.rawDate);
+        return !d || Number.isNaN(d.getTime()) ? '' : d.getFullYear().toString();
       }));
       const currentYear = new Date().getFullYear().toString();
       setYear(years.has(currentYear) ? currentYear : years.values().next().value || currentYear);

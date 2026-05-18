@@ -465,7 +465,7 @@ export default function AttendanceReportScreen() {
         <Button
           title="Apply Leave"
           onPress={() =>
-            navigation.navigate("Dashboard", { screen: "ApplyLeave" })
+            navigation.getParent()?.navigate("Dashboard", { screen: "ApplyLeave" })
           }
           icon={<Plus size={16} color="#FFFFFF" />}
         />

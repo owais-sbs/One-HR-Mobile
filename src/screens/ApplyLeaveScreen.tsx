@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   StyleSheet,
   View,
@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors } from '../theme/colors';
 import {
   ChevronLeft,
@@ -18,12 +19,11 @@ import {
   Clock,
   Check,
   AlertTriangle,
-  Info,
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
-import { API_ENDPOINTS } from '../config/apiConfig';
+import { API_CONFIG, API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
 import { getEmployeeData, refreshEmployeeData } from '../utils/currentEmployee';
 
@@ -38,6 +38,9 @@ interface CalendarDay {
   date: Date;
   isCurrentMonth: boolean;
   isToday: boolean;
+  isDisabled: boolean;
+  isHoliday: boolean;
+  hasExistingLeave: boolean;
   isSelected: boolean;
   isRangeStart: boolean;
   isRangeEnd: boolean;
@@ -66,6 +69,18 @@ interface ExistingLeaveRequest {
   endDate: string;
 }
 
+interface CompanyHoliday {
+  startDate?: string;
+  endDate?: string;
+  date?: string;
+  isactive?: boolean;
+  isdeleted?: boolean;
+}
+
+interface WorkingHourConfig {
+  workingDays?: string;
+}
+
 const getDaysInMonth = (year: number, month: number) => {
   return new Date(year, month + 1, 0).getDate();
 };
@@ -77,6 +92,118 @@ const getFirstDayOfMonth = (year: number, month: number) => {
 const toDateKey = (value?: string | null) => {
   if (!value) return '';
   return value.split('T')[0];
+};
+
+const toLocalDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateOnly = (value?: string | null) => {
+  const dateKey = toDateKey(value);
+  if (!dateKey) return null;
+  const [year, month, day] = dateKey.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
+
+const normalizeDayToken = (value?: string | null) => {
+  const map: Record<string, string> = {
+    monday: 'mon', mon: 'mon',
+    tuesday: 'tue', tue: 'tue',
+    wednesday: 'wed', wed: 'wed',
+    thursday: 'thu', thu: 'thu',
+    friday: 'fri', fri: 'fri',
+    saturday: 'sat', sat: 'sat',
+    sunday: 'sun', sun: 'sun',
+  };
+  return value ? map[value.trim().toLowerCase()] || value.trim().toLowerCase() : '';
+};
+
+const getDayToken = (date: Date) => ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][date.getDay()];
+
+const buildWorkingDaySet = (workingDays?: string) =>
+  new Set(
+    (workingDays || '')
+      .split(',')
+      .map(normalizeDayToken)
+      .filter(Boolean),
+  );
+
+const buildDateRangeKeys = (startValue?: string | null, endValue?: string | null) => {
+  const start = parseDateOnly(startValue);
+  const end = parseDateOnly(endValue || startValue);
+  if (!start || !end) return [];
+
+  const keys: string[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    keys.push(toLocalDateKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return keys;
+};
+
+const buildHolidayDateSet = (holidays: CompanyHoliday[]) =>
+  new Set(
+    holidays.flatMap((holiday) => {
+      if (holiday?.isdeleted || holiday?.isactive === false) return [];
+      return buildDateRangeKeys(
+        holiday.startDate || holiday.date,
+        holiday.endDate || holiday.startDate || holiday.date,
+      );
+    }),
+  );
+
+const buildExistingLeaveDateSet = (leaves: ExistingLeaveRequest[]) =>
+  new Set(
+    leaves.flatMap((leave) => buildDateRangeKeys(leave.startDate, leave.endDate)),
+  );
+
+const fetchOptionalApiData = async (path: string) => {
+  try {
+    const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    const response = await fetch(`${API_CONFIG.BASE_URL}${path}`, {
+      headers: {
+        ...API_CONFIG.HEADERS,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json().catch(() => null);
+    return data?.data || data || null;
+  } catch {
+    return null;
+  }
+};
+
+const isHolidayDate = (date: Date, holidayDateSet: Set<string>) =>
+  holidayDateSet.has(toLocalDateKey(date));
+
+const hasExistingLeaveOnDate = (date: Date, existingLeaveDateSet: Set<string>) =>
+  existingLeaveDateSet.has(toLocalDateKey(date));
+
+const isSelectableWorkingDate = (
+  date: Date,
+  workingDaySet: Set<string>,
+  holidayDateSet: Set<string>,
+  existingLeaveDateSet: Set<string>,
+  minDate: Date,
+) => {
+  const current = new Date(date);
+  current.setHours(0, 0, 0, 0);
+  if (current < minDate) return false;
+  if (workingDaySet.size > 0 && !workingDaySet.has(getDayToken(current))) return false;
+  if (isHolidayDate(current, holidayDateSet)) return false;
+  if (hasExistingLeaveOnDate(current, existingLeaveDateSet)) return false;
+  return true;
 };
 
 const rangesOverlap = (
@@ -101,7 +228,10 @@ const hasLeaveConflict = (
 const generateCalendarDays = (
   year: number,
   month: number,
-  selectedRange: { start: Date | null; end: Date | null }
+  selectedRange: { start: Date | null; end: Date | null },
+  workingDaySet: Set<string>,
+  holidayDateSet: Set<string>,
+  existingLeaveDateSet: Set<string>,
 ): CalendarDay[] => {
   const daysInMonth = getDaysInMonth(year, month);
   const firstDay = getFirstDayOfMonth(year, month);
@@ -116,11 +246,16 @@ const generateCalendarDays = (
   for (let i = firstDay - 1; i >= 0; i--) {
     const dayNum = daysInPrevMonth - i;
     const date = new Date(prevMonthYear, prevMonth, dayNum);
+    const isHoliday = isHolidayDate(date, holidayDateSet);
+    const hasExistingLeave = hasExistingLeaveOnDate(date, existingLeaveDateSet);
     days.push({
       day: dayNum,
       date,
       isCurrentMonth: false,
       isToday: date.getTime() === today.getTime(),
+      isDisabled: true,
+      isHoliday,
+      hasExistingLeave,
       isSelected: false,
       isRangeStart: false,
       isRangeEnd: false,
@@ -130,6 +265,9 @@ const generateCalendarDays = (
 
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(year, month, day);
+    const isHoliday = isHolidayDate(date, holidayDateSet);
+    const hasExistingLeave = hasExistingLeaveOnDate(date, existingLeaveDateSet);
+    const isDisabled = !isSelectableWorkingDate(date, workingDaySet, holidayDateSet, existingLeaveDateSet, today);
     const isSelected = selectedRange.start !== null &&
       date.getTime() === selectedRange.start.getTime();
     const isRangeEnd = selectedRange.end !== null &&
@@ -143,6 +281,9 @@ const generateCalendarDays = (
       date,
       isCurrentMonth: true,
       isToday: date.getTime() === today.getTime(),
+      isDisabled,
+      isHoliday,
+      hasExistingLeave,
       isSelected,
       isRangeStart: isSelected,
       isRangeEnd,
@@ -153,11 +294,16 @@ const generateCalendarDays = (
   const remainingDays = 42 - days.length;
   for (let day = 1; day <= remainingDays; day++) {
     const date = new Date(month === 11 ? year + 1 : year, month === 11 ? 0 : month + 1, day);
+    const isHoliday = isHolidayDate(date, holidayDateSet);
+    const hasExistingLeave = hasExistingLeaveOnDate(date, existingLeaveDateSet);
     days.push({
       day,
       date,
       isCurrentMonth: false,
       isToday: date.getTime() === today.getTime(),
+      isDisabled: true,
+      isHoliday,
+      hasExistingLeave,
       isSelected: false,
       isRangeStart: false,
       isRangeEnd: false,
@@ -184,10 +330,22 @@ export default function ApplyLeaveScreen({ navigation }: any) {
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [balances, setBalances] = useState<LeaveBalance[]>([]);
   const [employee, setEmployee] = useState<any>(null);
+  const [existingLeaves, setExistingLeaves] = useState<ExistingLeaveRequest[]>([]);
+  const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
+  const [workingDays, setWorkingDays] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const holidayDateSet = buildHolidayDateSet(holidays);
+  const existingLeaveDateSet = buildExistingLeaveDateSet(existingLeaves);
 
-  const calendarDays = generateCalendarDays(currentYear, currentMonth, selectedRange);
+  const calendarDays = generateCalendarDays(
+    currentYear,
+    currentMonth,
+    selectedRange,
+    workingDays,
+    holidayDateSet,
+    existingLeaveDateSet,
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -207,18 +365,35 @@ export default function ApplyLeaveScreen({ navigation }: any) {
       const typesUrl = companyId
         ? API_ENDPOINTS.LEAVE_TYPES.BY_COMPANY(companyId)
         : API_ENDPOINTS.LEAVE_TYPES.LIST;
-      const typesRes = await apiClient.get(typesUrl);
-      if (typesRes.data?.isSuccess !== false) {
-        const types = typesRes.data?.data || [];
-        setLeaveTypes(types);
+
+      const [typesRes, balancesRes, leavesRes, holidaysData, workingHoursData] = await Promise.allSettled([
+        apiClient.get(typesUrl),
+        emp?.id ? apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(emp.id)) : Promise.resolve(null),
+        emp?.id ? apiClient.get(API_ENDPOINTS.LEAVE.MY_LEAVES(emp.id)) : Promise.resolve(null),
+        companyId ? fetchOptionalApiData(API_ENDPOINTS.HOLIDAYS.BY_COMPANY(companyId)) : Promise.resolve(null),
+        companyId ? fetchOptionalApiData(API_ENDPOINTS.WORKING_HOURS.BY_COMPANY(companyId)) : Promise.resolve(null),
+      ]);
+
+      if (typesRes.status === 'fulfilled' && typesRes.value?.data?.isSuccess !== false) {
+        setLeaveTypes(typesRes.value?.data?.data || []);
       }
 
-      if (emp?.id) {
-        const balRes = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(emp.id));
-        if (balRes.data?.isSuccess !== false) {
-          setBalances(balRes.data?.data || []);
-        }
+      if (balancesRes.status === 'fulfilled' && balancesRes.value?.data?.isSuccess !== false) {
+        setBalances(balancesRes.value?.data?.data || []);
       }
+
+      if (leavesRes.status === 'fulfilled' && leavesRes.value?.data?.isSuccess !== false) {
+        setExistingLeaves(Array.isArray(leavesRes.value?.data?.data) ? leavesRes.value.data.data : []);
+      }
+
+      if (holidaysData.status === 'fulfilled') {
+        setHolidays(Array.isArray(holidaysData.value) ? holidaysData.value : []);
+      }
+
+      const workingHour = workingHoursData.status === 'fulfilled'
+        ? workingHoursData.value as WorkingHourConfig | null
+        : null;
+      setWorkingDays(buildWorkingDaySet(workingHour?.workingDays));
     } catch (error) {
       console.error('Load data error:', error);
     } finally {
@@ -245,7 +420,7 @@ export default function ApplyLeaveScreen({ navigation }: any) {
   };
 
   const handleDayPress = (day: CalendarDay) => {
-    if (!day.isCurrentMonth) return;
+    if (!day.isCurrentMonth || day.isDisabled) return;
 
     if (!selectingEnd) {
       setSelectedRange({ start: day.date, end: null });
@@ -263,8 +438,16 @@ export default function ApplyLeaveScreen({ navigation }: any) {
 
   const getSelectedDaysCount = () => {
     if (!selectedRange.start || !selectedRange.end) return 0;
-    const diff = selectedRange.end.getTime() - selectedRange.start.getTime();
-    return Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
+    let count = 0;
+    const cursor = new Date(selectedRange.start);
+    const minDate = new Date(selectedRange.start.getFullYear(), selectedRange.start.getMonth(), selectedRange.start.getDate());
+    while (cursor <= selectedRange.end) {
+      if (isSelectableWorkingDate(cursor, workingDays, holidayDateSet, new Set(), minDate)) {
+        count += 1;
+      }
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return count;
   };
 
   const getBalanceForType = (typeId: number) => {
@@ -305,8 +488,23 @@ export default function ApplyLeaveScreen({ navigation }: any) {
         ? currentLeavesResponse.data.data
         : [];
 
-      const startDateKey = selectedRange.start.toISOString().split('T')[0];
-      const endDateKey = selectedRange.end.toISOString().split('T')[0];
+      const startDateKey = toLocalDateKey(selectedRange.start);
+      const endDateKey = toLocalDateKey(selectedRange.end);
+      const startDate = new Date(selectedRange.start);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(selectedRange.end);
+      endDate.setHours(0, 0, 0, 0);
+
+      if (!isSelectableWorkingDate(startDate, workingDays, holidayDateSet, new Set(), startDate)) {
+        Alert.alert('Error', 'Start date must be a company working day and not a holiday.');
+        return;
+      }
+
+      if (!isSelectableWorkingDate(endDate, workingDays, holidayDateSet, new Set(), startDate)) {
+        Alert.alert('Error', 'End date must be a company working day and not a holiday.');
+        return;
+      }
+
       const hasConflict = hasLeaveConflict(
         currentLeaves,
         startDateKey,
@@ -320,8 +518,8 @@ export default function ApplyLeaveScreen({ navigation }: any) {
       const payload = {
         employeeId: freshEmployee.id,
         leaveTypeId: selectedLeaveType,
-        startDate: selectedRange.start.toISOString().split('T')[0],
-        endDate: selectedRange.end.toISOString().split('T')[0],
+        startDate: toLocalDateKey(selectedRange.start),
+        endDate: toLocalDateKey(selectedRange.end),
         leaveDays: getSelectedDaysCount(),
         reason: reason.trim(),
         companyId: freshEmployee.companyId,
@@ -375,9 +573,13 @@ export default function ApplyLeaveScreen({ navigation }: any) {
           <Pressable
             key={index}
             onPress={() => handleDayPress(day)}
+            disabled={day.isDisabled}
             style={[
               styles.dayCell,
               !day.isCurrentMonth && styles.otherMonthDay,
+              day.isDisabled && styles.disabledDay,
+              day.isHoliday && styles.holidayDay,
+              day.hasExistingLeave && styles.existingLeaveDay,
               day.isToday && styles.todayCell,
               (day.isRangeStart || day.isRangeEnd) && styles.selectedDay,
               day.isRangeStart && styles.rangeStart,
@@ -391,6 +593,7 @@ export default function ApplyLeaveScreen({ navigation }: any) {
               color={
                 !day.isCurrentMonth ? colors.text.muted + '40' :
                 (day.isRangeStart || day.isRangeEnd) ? '#FFFFFF' :
+                day.isDisabled ? colors.text.muted :
                 day.isInRange ? colors.text.primary :
                 colors.text.primary
               }
@@ -399,6 +602,21 @@ export default function ApplyLeaveScreen({ navigation }: any) {
             </Text>
           </Pressable>
         ))}
+      </View>
+
+      <View style={styles.calendarLegend}>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, styles.todayCell]} />
+          <Text variant="regular" size={11} color={colors.text.muted}>Today</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, styles.holidayDay]} />
+          <Text variant="regular" size={11} color={colors.text.muted}>Holiday / day off</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendDot, styles.existingLeaveDay]} />
+          <Text variant="regular" size={11} color={colors.text.muted}>Already requested</Text>
+        </View>
       </View>
 
       {selectedRange.start && (
@@ -670,6 +888,15 @@ const styles = StyleSheet.create({
   otherMonthDay: {
     opacity: 0.3,
   },
+  disabledDay: {
+    backgroundColor: '#F3F4F6',
+  },
+  holidayDay: {
+    backgroundColor: '#FEF3C7',
+  },
+  existingLeaveDay: {
+    backgroundColor: '#FEE2E2',
+  },
   todayCell: {
     borderWidth: 1,
     borderColor: colors.secondary,
@@ -687,6 +914,22 @@ const styles = StyleSheet.create({
   },
   inRangeDay: {
     backgroundColor: colors.secondary + '20',
+  },
+  calendarLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 12,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 4,
   },
   selectionInfo: {
     flexDirection: 'row',
