@@ -16,9 +16,11 @@ import {
   CheckCircle,
   XCircle,
   Briefcase,
+  Plus,
 } from "lucide-react-native";
 import { Text } from "../components/ui/Typography";
 import { ScreenHeader } from "../components/ui/ScreenHeader";
+import { Button } from "../components/ui/Button";
 import apiClient from "../api/apiClient";
 import { API_ENDPOINTS, STORAGE_KEYS, CACHE_TTL } from "../config/apiConfig";
 import { getCurrentEmployee } from "../api/employeeService";
@@ -333,6 +335,9 @@ export default function AttendanceReportScreen() {
   const clockedInCount = monthDays.filter(
     (day) => day.status === "Clocked In",
   ).length;
+  const halfDayCount = monthDays.filter(
+    (day) => day.workingDay && day.hours > 0 && day.hours < 4,
+  ).length;
   const absentCount = monthDays.filter((day) => day.status === "Absent").length;
   const workingCount = monthDays.filter((day) => day.workingDay).length;
   const totalHours = monthDays.reduce((sum, day) => sum + day.hours, 0);
@@ -425,6 +430,16 @@ export default function AttendanceReportScreen() {
           </Text>
         </View>
 
+        <View style={[styles.compactStatBox, { borderLeftColor: "#F59E0B" }]}>
+          <Clock size={14} color="#F59E0B" />
+          <Text variant="bold" size={18} color="#0F172A">
+            {halfDayCount}
+          </Text>
+          <Text variant="medium" size={10} color="#64748B">
+            Half Day
+          </Text>
+        </View>
+
         <View style={[styles.compactStatBox, { borderLeftColor: "#EF4444" }]}>
           <XCircle size={14} color="#EF4444" />
           <Text variant="bold" size={18} color="#0F172A">
@@ -444,6 +459,16 @@ export default function AttendanceReportScreen() {
             Work Days
           </Text>
         </View>
+      </View>
+
+      <View style={styles.applyLeaveRow}>
+        <Button
+          title="Apply Leave"
+          onPress={() =>
+            navigation.navigate("Dashboard", { screen: "ApplyLeave" })
+          }
+          icon={<Plus size={16} color="#FFFFFF" />}
+        />
       </View>
 
       <Text variant="bold" size={16} color="#0F172A" style={styles.listTitle}>
@@ -614,6 +639,10 @@ const styles = StyleSheet.create({
   headerContent: {
     marginBottom: 8,
   },
+  applyLeaveRow: {
+    marginTop: 16,
+    marginBottom: 16,
+  },
 
   // Pending State Header
   pendingState: {
@@ -686,12 +715,14 @@ const styles = StyleSheet.create({
   // Compact Stats Row
   compactStatsRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     marginBottom: 20,
     gap: 8,
   },
   compactStatBox: {
-    flex: 1,
+    flexBasis: "48%",
+    minWidth: "48%",
     backgroundColor: "#FFFFFF",
     borderRadius: 14,
     padding: 10,

@@ -141,6 +141,11 @@ export const API_ENDPOINTS = {
   PAYROLL: {
     MY_DEDUCTION_NOTIFICATIONS: (date) =>
       `/payroll/me/deduction-notifications${date ? `?date=${date}` : ""}`,
+    MY_SUMMARY: (year, month) =>
+      `/payroll/me/summary${year != null && month != null ? `?year=${year}&month=${month}` : ""}`,
+  },
+  PAYROLL_DEDUCTIONS: {
+    BY_COMPANY: (companyId) => `/payroll-deductions/company/${companyId}`,
   },
   SUPER_ADMINS: {
     LIST: "/super-admins",
@@ -187,14 +192,22 @@ export const STORAGE_KEYS = {
   SALARY_HISTORY_CACHE: "salaryHistoryCache",
   PROFILE_CACHE: "profileCache",
   DEPARTMENT_CACHE: "departmentCache",
+  CURRENT_EMPLOYEE_CACHE: "currentEmployeeCache",
+  NOTIFICATION_CENTER_CACHE: "notificationCenterCache",
+  NOTIFICATION_DEDUCTION_CACHE: "notificationDeductionCache",
+  PAYROLL_SUMMARY_CACHE: "payrollSummaryCache",
   LOCATION_PERMISSION: "locationPermission",
 };
 
 export const CACHE_TTL = {
+  EMPLOYEE: 15 * 60 * 1000, // 15 minutes
+  COMPANY: 30 * 60 * 1000, // 30 minutes
   ATTENDANCE: 5 * 60 * 1000, // 5 minutes
   SALARY_STRUCTURE: 30 * 60 * 1000, // 30 minutes
   SALARY_DATA: 5 * 60 * 1000, // 5 minutes
   SALARY_HISTORY: 10 * 60 * 1000, // 10 minutes
   PROFILE: 10 * 60 * 1000, // 10 minutes
   DEPARTMENT: 15 * 60 * 1000, // 15 minutes
+  PAYROLL_SUMMARY: 5 * 60 * 1000, // 5 minutes
+  NOTIFICATIONS: 5 * 60 * 1000, // 5 minutes
 };

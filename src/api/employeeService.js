@@ -1,5 +1,7 @@
 import apiClient from './apiClient';
-import { API_ENDPOINTS } from '../config/apiConfig';
+import { API_ENDPOINTS, CACHE_TTL, STORAGE_KEYS } from '../config/apiConfig';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getCachedOrFetch } from '../utils/cache';
 
 export const getAllEmployees = async () => {
   const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.LIST);
@@ -11,9 +13,24 @@ export const getEmployeeById = async (id) => {
   return response.data;
 };
 
-export const getCurrentEmployee = async () => {
-  const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.ME);
-  return response.data;
+export const getCurrentEmployee = async (options = {}) => {
+  const { forceRefresh = false } = options;
+  return getCachedOrFetch(
+    STORAGE_KEYS.CURRENT_EMPLOYEE_CACHE,
+    async () => {
+      const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.ME);
+      const data = response.data;
+      const normalized = data?.data || data;
+      if (normalized) {
+        await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(normalized));
+      }
+      return data;
+    },
+    {
+      ttlMs: CACHE_TTL.EMPLOYEE,
+      forceRefresh,
+    },
+  );
 };
 
 export const getEmployeesByDepartment = async (departmentId) => {

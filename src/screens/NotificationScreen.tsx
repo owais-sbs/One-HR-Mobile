@@ -114,8 +114,14 @@ export default function NotificationScreen() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      const cached = await loadNotificationCenter();
+      if (cached.length > 0) {
+        setNotifications(cached);
+        setLoading(false);
+      }
+
       const refreshed = await refreshNotificationCenter();
-      setNotifications(refreshed.length > 0 ? refreshed : await loadNotificationCenter());
+      setNotifications(refreshed.length > 0 ? refreshed : cached);
     } catch (error) {
       console.error('Notification load error:', error);
       setNotifications(await loadNotificationCenter());

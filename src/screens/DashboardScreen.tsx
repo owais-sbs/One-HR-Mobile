@@ -131,18 +131,6 @@ function isSameMonth(left: Date, right: Date) {
   );
 }
 
-function isSameWeek(left: Date, right: Date) {
-  const d1 = new Date(left);
-  const d2 = new Date(right);
-  d1.setHours(0, 0, 0, 0);
-  d2.setHours(0, 0, 0, 0);
-  const day1 = d1.getDay() || 7;
-  d1.setDate(d1.getDate() - day1 + 1);
-  const day2 = d2.getDay() || 7;
-  d2.setDate(d2.getDate() - day2 + 1);
-  return d1.getTime() === d2.getTime();
-}
-
 function isSameDay(left: Date, right: Date) {
   return (
     left.getFullYear() === right.getFullYear() &&
@@ -203,6 +191,58 @@ const WEEKDAY_BY_INDEX = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 
 function getWeekdayKey(date: Date) {
   return WEEKDAY_BY_INDEX[date.getDay()] || "mon";
+}
+
+function getDateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function isCompanyWorkingDate(
+  date: Date,
+  workingDayKeys: string[],
+  holidays: any[],
+) {
+  const weekdayKey = getWeekdayKey(date);
+  const enabledWorkingDays =
+    workingDayKeys.length > 0 ? workingDayKeys : WORKING_DAY_ORDER.slice(0, 5);
+
+  return (
+    enabledWorkingDays.includes(weekdayKey) &&
+    !holidays.some((holiday) => isDateWithinHoliday(date, holiday))
+  );
+}
+
+function getRollingActivityDates(
+  referenceDate: Date,
+  workingDayKeys: string[],
+  holidays: any[],
+) {
+  const today = startOfLocalDay(referenceDate);
+  const previousWorkingDates: Date[] = [];
+  const cursor = new Date(today);
+  cursor.setDate(cursor.getDate() - 1);
+
+  for (
+    let guard = 0;
+    previousWorkingDates.length < 4 && guard < 90;
+    guard += 1
+  ) {
+    if (isCompanyWorkingDate(cursor, workingDayKeys, holidays)) {
+      previousWorkingDates.unshift(new Date(cursor));
+    }
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  return [...previousWorkingDates, today];
 }
 
 type LeaveType = {
@@ -530,7 +570,7 @@ export default function DashboardScreen({ navigation }: any) {
       const data = response.data?.data;
       if (data) {
         await refreshAttendanceState(data);
-        refreshNotificationCenter().catch(console.error);
+        refreshNotificationCenter({ forceRefresh: true }).catch(console.error);
       }
     } catch (error: any) {
       Alert.alert(
@@ -557,7 +597,7 @@ export default function DashboardScreen({ navigation }: any) {
       const data = response.data?.data;
       if (data) {
         await refreshAttendanceState(data);
-        refreshNotificationCenter().catch(console.error);
+        refreshNotificationCenter({ forceRefresh: true }).catch(console.error);
       }
     } catch (error: any) {
       Alert.alert(
@@ -693,17 +733,6 @@ export default function DashboardScreen({ navigation }: any) {
     }
   };
 
-  const dateRangeStr = useMemo(() => {
-    const today = new Date(currentTime);
-    const dayOfWeek = today.getDay();
-    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-    const monday = new Date(today);
-    monday.setDate(today.getDate() + mondayOffset);
-    const friday = new Date(monday);
-    friday.setDate(monday.getDate() + 4);
-    const fmt = (d: Date) => d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
-    return `${fmt(monday)} - ${fmt(friday)}`;
-  }, [currentTime]);
   const timeStr = currentTime.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -804,56 +833,58 @@ export default function DashboardScreen({ navigation }: any) {
     [combinedAttendanceHistory, currentTime],
   );
 
-  const weeklyAttendance = useMemo(
+  const activityWorkingDayKeys = useMemo(
     () =>
-      combinedAttendanceHistory.filter((item) => {
-        const checkIn = parseCompanyDateTime(item.inTime);
-        return (
-          Boolean(checkIn) && isSameWeek(checkIn, currentTime)
-        );
-      }),
-    [combinedAttendanceHistory, currentTime],
+      configuredWorkingDayKeys.length > 0
+        ? configuredWorkingDayKeys
+        : WORKING_DAY_ORDER.slice(0, 5),
+    [configuredWorkingDayKeys],
   );
 
-  const attendanceHoursByWeekday = useMemo(() => {
-    return weeklyAttendance.reduce(
+  const activityDateWindow = useMemo(
+    () =>
+      getRollingActivityDates(
+        currentTime,
+        activityWorkingDayKeys,
+        companyHolidays,
+      ),
+    [currentTime, activityWorkingDayKeys, companyHolidays],
+  );
+
+  const dateRangeStr = useMemo(() => {
+    const fmt = (d: Date) =>
+      d.toLocaleDateString("en-US", {
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+      });
+    const firstDate = activityDateWindow[0] || currentTime;
+    const lastDate =
+      activityDateWindow[activityDateWindow.length - 1] || currentTime;
+    return `${fmt(firstDate)} - ${fmt(lastDate)}`;
+  }, [activityDateWindow, currentTime]);
+
+  const attendanceHoursByDate = useMemo(() => {
+    return combinedAttendanceHistory.reduce(
       (acc, item) => {
         const checkIn = parseCompanyDateTime(item.inTime);
         if (!checkIn) return acc;
-        const weekdayKey = getWeekdayKey(checkIn);
-        acc[weekdayKey] =
-          (acc[weekdayKey] || 0) + getWorkedHours(item);
+        const dateKey = getDateKey(checkIn);
+        acc[dateKey] = (acc[dateKey] || 0) + getWorkedHours(item);
         return acc;
       },
       {} as Record<string, number>,
     );
-  }, [weeklyAttendance]);
+  }, [combinedAttendanceHistory]);
 
-  const observedWorkingDayKeys = useMemo(() => {
-    const keys = Array.from(
-      new Set(
-        weeklyAttendance
-          .map((item) => parseCompanyDateTime(item.inTime))
-          .filter((item): item is Date => Boolean(item))
-          .map((item) => getWeekdayKey(item)),
-      ),
-    );
-    return keys.sort(
-      (left, right) =>
-        WORKING_DAY_ORDER.indexOf(left) - WORKING_DAY_ORDER.indexOf(right),
-    );
-  }, [weeklyAttendance]);
-
-  const weeklyChartKeys =
-    configuredWorkingDayKeys.length > 0
-      ? configuredWorkingDayKeys
-      : observedWorkingDayKeys.length > 0
-        ? observedWorkingDayKeys
-        : WORKING_DAY_ORDER.slice(0, 5);
-  const weeklyActivityData = weeklyChartKeys.map((dayKey) => ({
-    label: WORKING_DAY_LABELS[dayKey] || dayKey.toUpperCase(),
-    value: Number((attendanceHoursByWeekday[dayKey] || 0).toFixed(1)),
-  }));
+  const weeklyActivityData = activityDateWindow.map((date) => {
+    const dayKey = getWeekdayKey(date);
+    const dateKey = getDateKey(date);
+    return {
+      label: WORKING_DAY_LABELS[dayKey] || dayKey.toUpperCase(),
+      value: Number((attendanceHoursByDate[dateKey] || 0).toFixed(1)),
+    };
+  });
 
   const monthlyHours = monthlyAttendance.reduce(
     (sum, item) => sum + getWorkedHours(item),

@@ -24,6 +24,7 @@ import EmployeeAvatar from '../components/ui/EmployeeAvatar';
 import { STORAGE_KEYS, API_ENDPOINTS, CACHE_TTL } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
 import { normalizeEmployeeData } from '../utils/employeeData';
+import { clearAllNotificationState } from '../services/notificationService';
 
 const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = true, destructive = false }: any) => (
   <Pressable
@@ -190,6 +191,7 @@ export default function ProfileScreen({ navigation }: any) {
             try {
               const allKeys = await AsyncStorage.getAllKeys();
               const companyCacheKeys = allKeys.filter((k) => k.startsWith(STORAGE_KEYS.COMPANY_DATA));
+              await clearAllNotificationState();
               await AsyncStorage.multiRemove([
                 ...companyCacheKeys,
                 STORAGE_KEYS.AUTH_TOKEN,

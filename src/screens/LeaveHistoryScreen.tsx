@@ -18,9 +18,11 @@ import {
   AlertCircle,
   ChevronRight,
   Filter,
+  Plus,
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
+import { Button } from '../components/ui/Button';
 import { API_ENDPOINTS } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
 import { getEmployeeData } from '../utils/currentEmployee';
@@ -203,7 +205,10 @@ export default function LeaveHistoryScreen({ navigation }: any) {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-      <ScreenHeader title="My Leave Requests" onBack={() => navigation.goBack()} />
+      <ScreenHeader
+        title="My Leave Requests"
+        onBack={() => navigation.goBack()}
+      />
 
       <View style={styles.filterContainer}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
@@ -244,6 +249,14 @@ export default function LeaveHistoryScreen({ navigation }: any) {
           ) : (
             filteredLeaves.map(renderLeaveCard)
           )}
+
+          <View style={styles.actionRow}>
+            <Button
+              title="Apply Leave"
+              onPress={() => navigation.navigate("ApplyLeave")}
+              icon={<Plus size={16} color="#FFFFFF" />}
+            />
+          </View>
         </ScrollView>
       )}
     </SafeAreaView>
@@ -258,6 +271,9 @@ const styles = StyleSheet.create({
   filterContainer: {
     paddingVertical: 8,
     paddingHorizontal: 12,
+  },
+  actionRow: {
+    paddingTop: 12,
   },
   filterScroll: {
     gap: 8,

@@ -26,12 +26,31 @@ function getMonthLabel(dateString?: string) {
   return date.toLocaleDateString('en-US', { month: 'short' });
 }
 
+function formatPayrollPeriodLabel(startDate?: string, endDate?: string, fallback?: string) {
+  if (!startDate || !endDate) return fallback || '';
+
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    return fallback || '';
+  }
+
+  const sameMonth = start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth();
+  if (sameMonth) {
+    return start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  }
+
+  return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
+}
+
 export default function SalaryDetailsScreen() {
   const { currency, refreshCurrency } = useCurrency();
   const [employee, setEmployee] = useState<any>(null);
   const [salaryData, setSalaryData] = useState<any>(null);
   const [salaryStructure, setSalaryStructure] = useState<any>(null);
   const [salaryHistory, setSalaryHistory] = useState<any[]>([]);
+  const [payrollSummary, setPayrollSummary] = useState<any>(null);
+  const [payrollRules, setPayrollRules] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -216,6 +235,18 @@ export default function SalaryDetailsScreen() {
         setSalaryStructure(null);
       }
 
+      const [payrollSummaryResponse, payrollRulesResponse] = await Promise.all([
+        apiClient
+          .get(API_ENDPOINTS.PAYROLL.MY_SUMMARY())
+          .catch(() => null),
+        companyId
+          ? apiClient.get(API_ENDPOINTS.PAYROLL_DEDUCTIONS.BY_COMPANY(companyId)).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      setPayrollSummary(unwrapApiData(payrollSummaryResponse));
+      setPayrollRules(unwrapApiData(payrollRulesResponse));
+
       const historyCacheKey = `${STORAGE_KEYS.SALARY_HISTORY_CACHE}_${resolvedEmployeeId || employeeCandidates[0]}`;
       if (!forceRefresh) {
         const cachedHistory = await AsyncStorage.getItem(historyCacheKey);
@@ -288,6 +319,8 @@ export default function SalaryDetailsScreen() {
       }
     } catch (err: any) {
       console.error('SalaryDetails fetch error:', err);
+      setPayrollSummary(null);
+      setPayrollRules(null);
       setError(err?.response?.data?.message || 'Failed to load salary details');
     } finally {
       setLoading(false);
@@ -351,19 +384,32 @@ export default function SalaryDetailsScreen() {
   }, [salaryStructure]);
 
   const grossEarnings = React.useMemo(() => {
+    if (payrollSummary?.periodBaseSalary != null || payrollSummary?.totalAllowances != null) {
+      return Number(payrollSummary?.periodBaseSalary || 0) + Number(payrollSummary?.totalAllowances || 0);
+    }
     if (salaryData?.grossSalary != null) return Number(salaryData.grossSalary);
     return earnings.reduce((sum: number, item: any) => sum + (item.amount || 0), 0);
-  }, [salaryData, earnings]);
+  }, [payrollSummary, salaryData, earnings]);
 
   const totalDeductions = React.useMemo(() => {
+    if (payrollSummary) {
+      return (
+        Number(payrollSummary.totalDeductions || 0)
+        + Number(payrollSummary.extraLeaveDeduction || 0)
+        + Number(payrollSummary.lateDeduction || 0)
+        + Number(payrollSummary.halfDayDeduction || 0)
+        + Number(payrollSummary.absenceDeduction || 0)
+      );
+    }
     if (salaryData?.totalDeductions != null) return Number(salaryData.totalDeductions);
     return deductions.reduce((sum: number, item: any) => sum + (item.amount || 0), 0);
-  }, [salaryData, deductions]);
+  }, [payrollSummary, salaryData, deductions]);
 
   const netSalary = React.useMemo(() => {
+    if (payrollSummary?.finalSalary != null) return Number(payrollSummary.finalSalary);
     if (salaryData?.netSalary != null) return Number(salaryData.netSalary);
     return grossEarnings - totalDeductions;
-  }, [salaryData, grossEarnings, totalDeductions]);
+  }, [payrollSummary, salaryData, grossEarnings, totalDeductions]);
 
   const historyChartData = React.useMemo(() => {
     if (!Array.isArray(salaryHistory) || salaryHistory.length === 0) return [];
@@ -386,12 +432,19 @@ export default function SalaryDetailsScreen() {
   }, [salaryHistory]);
 
   const currentMonthLabel = React.useMemo(() => {
+    if (payrollSummary?.periodStartDate && payrollSummary?.periodEndDate) {
+      return formatPayrollPeriodLabel(
+        payrollSummary.periodStartDate,
+        payrollSummary.periodEndDate,
+        payrollSummary.payMonthLabel,
+      );
+    }
     if (salaryData?.salaryMonth && salaryData?.salaryYear) {
       const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
       return `${monthNames[salaryData.salaryMonth - 1] || ''} ${salaryData.salaryYear}`.trim();
     }
     return new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-  }, [salaryData]);
+  }, [payrollSummary, salaryData]);
 
   const effectiveCurrency = React.useMemo(() => {
     const candidates = [
@@ -411,6 +464,64 @@ export default function SalaryDetailsScreen() {
 
     return normalizeCurrencyCode(resolved || 'USD');
   }, [salaryData, salaryStructure, employee, currency]);
+
+  const lateThreshold = Number(payrollRules?.occurrencesBeforeDeduction || 0);
+  const lateCount = Number(payrollSummary?.lateCount || 0);
+  const deductibleLateDays = Number(payrollSummary?.deductibleLateDays ?? Math.max(0, lateCount - lateThreshold));
+  const annualSalary = Number(payrollSummary?.baseSalary ?? salaryData?.baseSalary ?? 0);
+  const currentMonthPayable = Number(payrollSummary?.finalSalary ?? netSalary ?? 0);
+  const currentMonthGross = Number(payrollSummary?.periodBaseSalary || 0) + Number(payrollSummary?.totalAllowances || 0);
+  const approvedLeaveDays = Number(payrollSummary?.approvedLeaveDays || 0);
+  const deductibleLeaveDays = Number(payrollSummary?.leaveDays || 0);
+  const absentDays = Number(payrollSummary?.absentDays || 0);
+  const halfDayCount = Number(payrollSummary?.halfDayCount || 0);
+  const workingDaysCount = Number(payrollSummary?.workingDaysCount || 0);
+  const presentDays = Number(payrollSummary?.presentDays || 0);
+
+  const displayedEarnings = React.useMemo(() => (
+    earnings.length > 0
+      ? earnings
+      : [
+        { label: 'Prorated Base Salary', amount: Number(payrollSummary?.periodBaseSalary || 0) },
+        { label: 'Allowances', amount: Number(payrollSummary?.totalAllowances || 0) },
+      ].filter((item) => item.amount > 0)
+  ), [earnings, payrollSummary]);
+
+  const monthlyPayrollDeductions = React.useMemo(() => {
+    if (!payrollSummary) return [];
+
+    const items = [
+      {
+        label: 'Structure Deductions',
+        amount: Number(payrollSummary.totalDeductions || 0),
+        note: 'Recurring salary deductions configured on the salary structure.',
+      },
+      {
+        label: 'Late Arrival',
+        amount: Number(payrollSummary.lateDeduction || 0),
+        note: lateThreshold > 0
+          ? `${lateCount} late arrivals this month. First ${lateThreshold} are free, ${deductibleLateDays} charged.`
+          : `${lateCount} late arrivals this month.`,
+      },
+      {
+        label: 'Half Day',
+        amount: Number(payrollSummary.halfDayDeduction || 0),
+        note: `${Number(payrollSummary.halfDayCount || 0)} half days recorded this month.`,
+      },
+      {
+        label: 'Leave Deduction',
+        amount: Number(payrollSummary.extraLeaveDeduction || 0),
+        note: `${deductibleLeaveDays} deductible leave day${deductibleLeaveDays === 1 ? '' : 's'} in this payroll period. Approved leave is excluded from absence deductions.`,
+      },
+      {
+        label: 'Absence Deduction',
+        amount: Number(payrollSummary.absenceDeduction || 0),
+        note: `${absentDays} absent working day${absentDays === 1 ? '' : 's'} with no attendance and no approved leave in this payroll period.`,
+      },
+    ];
+
+    return items.filter((item) => item.amount > 0 || item.label === 'Late Arrival');
+  }, [absentDays, deductibleLateDays, deductibleLeaveDays, lateCount, lateThreshold, payrollSummary]);
 
   if (loading) {
     return (
@@ -478,10 +589,10 @@ export default function SalaryDetailsScreen() {
             {currentMonthLabel}
           </Text>
           <Text variant="bold" size={42} color="#FFFFFF" style={styles.netAmount}>
-            {formatCurrency(netSalary, effectiveCurrency)}
+            {formatCurrency(currentMonthPayable, effectiveCurrency)}
           </Text>
           <Text variant="medium" size={11} color="rgba(255,255,255,0.6)" style={styles.netLabel}>
-            NET SALARY PAYABLE
+            CURRENT MONTH PAYABLE
           </Text>
 
           <Button
@@ -530,26 +641,26 @@ export default function SalaryDetailsScreen() {
             <View style={styles.structureMetaRow}>
               <View style={styles.structureMetaItem}>
                 <Text variant="regular" size={11} color={colors.text.muted}>
-                  Base Amount
+                  Yearly Salary
                 </Text>
                 <Text variant="semibold" size={13} color={colors.text.primary}>
-                  {salaryStructure?.baseAmount != null ? `${salaryStructure.baseAmount}%` : '—'}
+                  {annualSalary > 0 ? formatCurrency(annualSalary, effectiveCurrency) : '—'}
                 </Text>
               </View>
               <View style={styles.structureMetaItem}>
                 <Text variant="regular" size={11} color={colors.text.muted}>
-                  Components
+                  This Month Gross
                 </Text>
                 <Text variant="semibold" size={13} color={colors.text.primary}>
-                  {structureComponents.length}
+                  {currentMonthGross > 0 ? formatCurrency(currentMonthGross, effectiveCurrency) : '—'}
                 </Text>
               </View>
               <View style={styles.structureMetaItem}>
                 <Text variant="regular" size={11} color={colors.text.muted}>
-                  Structure ID
+                  Payable This Month
                 </Text>
                 <Text variant="semibold" size={13} color={colors.text.primary}>
-                  {salaryData?.salaryStructureId || salaryStructure?.id || '—'}
+                  {currentMonthPayable > 0 ? formatCurrency(currentMonthPayable, effectiveCurrency) : '—'}
                 </Text>
               </View>
             </View>
@@ -600,8 +711,8 @@ export default function SalaryDetailsScreen() {
             </Text>
           </View>
           <View style={styles.listCard}>
-            {earnings.map((item: any, index: number) => (
-              <View key={index} style={[styles.listItem, index === earnings.length - 1 && { borderBottomWidth: 0 }]}>
+            {displayedEarnings.map((item: any, index: number) => (
+              <View key={index} style={[styles.listItem, index === displayedEarnings.length - 1 && { borderBottomWidth: 0 }]}>
                 <Text variant="regular" size={13} color={colors.text.secondary}>
                   {item.label}
                 </Text>
@@ -622,23 +733,55 @@ export default function SalaryDetailsScreen() {
         </View>
 
         <View style={styles.section}>
+          {payrollSummary && (
+            <View style={styles.infoCard}>
+              <Text variant="semibold" size={12} color={colors.text.primary}>
+                Attendance summary
+              </Text>
+              <Text variant="regular" size={12} color={colors.text.secondary} style={styles.infoCardText}>
+                {`${presentDays}/${workingDaysCount} working days present, ${approvedLeaveDays} approved leave, ${absentDays} absences, ${lateCount} late arrivals, ${halfDayCount} half days.`}
+              </Text>
+            </View>
+          )}
           <View style={styles.sectionHeader}>
             <TrendingDown size={18} color={colors.error} />
             <Text variant="semibold" size={15} color={colors.error} style={styles.sectionTitle}>
               Deductions
             </Text>
           </View>
+          {payrollRules && (
+            <View style={styles.infoCard}>
+              <Text variant="semibold" size={12} color={colors.text.primary}>
+                Current late rule
+              </Text>
+              <Text variant="regular" size={12} color={colors.text.secondary} style={styles.infoCardText}>
+                {lateThreshold > 0
+                  ? `After ${lateThreshold} late arrivals in a month, ${formatCurrency(Number(payrollRules?.deductionAmountPerDay || 0), effectiveCurrency)} is deducted per late day after a ${Number(payrollRules?.gracePeriodMinutes || 0)} minute grace period.`
+                  : `Late arrivals start deducting immediately after the ${Number(payrollRules?.gracePeriodMinutes || 0)} minute grace period.`}
+              </Text>
+            </View>
+          )}
           <View style={styles.listCard}>
-            {deductions.map((item: any, index: number) => (
-              <View key={index} style={[styles.listItem, index === deductions.length - 1 && { borderBottomWidth: 0 }]}>
-                <Text variant="regular" size={13} color={colors.text.secondary}>
-                  {item.label}
-                </Text>
+            {monthlyPayrollDeductions.map((item: any, index: number) => (
+              <View key={item.label} style={[styles.listItemTall, index === monthlyPayrollDeductions.length - 1 && { borderBottomWidth: 0 }]}>
+                <View style={styles.listItemTextWrap}>
+                  <Text variant="regular" size={13} color={colors.text.secondary}>
+                    {item.label}
+                  </Text>
+                  <Text variant="regular" size={11} color={colors.text.muted} style={styles.listItemNote}>
+                    {item.note}
+                  </Text>
+                </View>
                 <Text variant="semibold" size={13} color={colors.error}>
                   {formatCurrency(item.amount, effectiveCurrency)}
                 </Text>
               </View>
             ))}
+            {monthlyPayrollDeductions.length === 0 && (
+              <Text variant="regular" size={12} color={colors.text.muted}>
+                No deductions were recorded for this month.
+              </Text>
+            )}
             <View style={[styles.listItem, styles.totalItem]}>
               <Text variant="semibold" size={14} color={colors.text.primary}>
                 Total Deductions
@@ -782,6 +925,18 @@ const styles = StyleSheet.create({
   sectionTitle: {
     marginLeft: 8,
   },
+  infoCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EEEEEE',
+    padding: 14,
+    marginBottom: 10,
+  },
+  infoCardText: {
+    marginTop: 6,
+    lineHeight: 18,
+  },
   listCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
@@ -847,6 +1002,22 @@ const styles = StyleSheet.create({
     padding: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F0F0F0',
+  },
+  listItemTall: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    gap: 12,
+  },
+  listItemTextWrap: {
+    flex: 1,
+  },
+  listItemNote: {
+    marginTop: 4,
+    lineHeight: 16,
   },
   totalItem: {
     borderBottomWidth: 0,

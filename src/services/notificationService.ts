@@ -3,11 +3,12 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import apiClient from '../api/apiClient';
-import { API_ENDPOINTS, STORAGE_KEYS } from '../config/apiConfig';
+import { API_ENDPOINTS, CACHE_TTL, STORAGE_KEYS } from '../config/apiConfig';
 import { getCompanyById } from '../api/companyService';
 import { getCurrentEmployee } from '../api/employeeService';
 import { normalizeEmployeeData } from '../utils/employeeData';
 import { formatCurrency, normalizeCurrencyCode } from '../utils/currency';
+import { getCachedOrFetch, readCache, removeCache, writeCache } from '../utils/cache';
 
 function isRunningInExpoGo(): boolean {
   return Constants.appOwnership === 'expo';
@@ -29,7 +30,7 @@ export type NotificationRecord = {
   amount?: number;
   currency?: string;
   eventDate?: string;
-  reasonType?: 'LATE_ARRIVAL' | 'HALF_DAY' | 'LEAVE' | string;
+  reasonType?: 'LATE_ARRIVAL' | 'HALF_DAY' | 'LEAVE' | 'ABSENCE' | string;
   occurrenceCount?: number;
   occurrencesBeforeDeduction?: number;
   deductionApplied?: boolean;
@@ -62,7 +63,7 @@ type AttendanceRecord = {
 };
 
 type DeductionNotificationItem = {
-  type?: 'LATE_ARRIVAL' | 'HALF_DAY' | 'LEAVE' | string;
+  type?: 'LATE_ARRIVAL' | 'HALF_DAY' | 'LEAVE' | 'ABSENCE' | string;
   title?: string;
   message?: string;
   amount?: number;
@@ -80,10 +81,16 @@ type DeductionNotificationResponse = {
   items?: DeductionNotificationItem[];
 };
 
-const NOTIFICATION_STORAGE_KEY = '@onehr.notifications.v1';
-const NOTIFICATION_SCHEDULE_KEY = '@onehr.notifications.scheduled.v1';
+type PayrollSummaryResponse = {
+  periodStartDate?: string;
+  periodEndDate?: string;
+};
+
+const NOTIFICATION_STORAGE_PREFIX = '@onehr.notifications.v2';
+const NOTIFICATION_SCHEDULE_PREFIX = '@onehr.notifications.scheduled.v2';
+const LEGACY_NOTIFICATION_STORAGE_KEY = '@onehr.notifications.v1';
+const LEGACY_NOTIFICATION_SCHEDULE_KEY = '@onehr.notifications.scheduled.v1';
 const NOTIFICATION_WINDOW_DAYS = 7;
-const DEDUCTION_LOOKBACK_DAYS = 3;
 const REMINDER_OFFSET_MINUTES = 5;
 
 let bootstrapComplete = false;
@@ -203,8 +210,33 @@ function buildNotificationTimeLabel(value?: string) {
   });
 }
 
-async function getStoredNotifications() {
-  const raw = await AsyncStorage.getItem(NOTIFICATION_STORAGE_KEY);
+function buildScopedStorageKey(prefix: string, employeeId?: number | string | null) {
+  return employeeId != null && employeeId !== ''
+    ? `${prefix}:${employeeId}`
+    : `${prefix}:anonymous`;
+}
+
+function getStorageContext(employeeId?: number | string | null) {
+  return {
+    notificationsKey: buildScopedStorageKey(NOTIFICATION_STORAGE_PREFIX, employeeId),
+    scheduledKey: buildScopedStorageKey(NOTIFICATION_SCHEDULE_PREFIX, employeeId),
+  };
+}
+
+function getNotificationCenterCacheKey(employeeId?: number | string | null) {
+  return buildScopedStorageKey(STORAGE_KEYS.NOTIFICATION_CENTER_CACHE, employeeId);
+}
+
+function getDeductionCacheKey(employeeId?: number | string | null, periodStart?: string | null, periodEnd?: string | null) {
+  return `${buildScopedStorageKey(STORAGE_KEYS.NOTIFICATION_DEDUCTION_CACHE, employeeId)}:${periodStart || 'unknown'}:${periodEnd || 'unknown'}`;
+}
+
+function getPayrollSummaryCacheKey(employeeId?: number | string | null) {
+  return buildScopedStorageKey(STORAGE_KEYS.PAYROLL_SUMMARY_CACHE, employeeId);
+}
+
+async function parseArrayStorageValue(key: string) {
+  const raw = await AsyncStorage.getItem(key);
   if (!raw) return [];
 
   try {
@@ -215,28 +247,41 @@ async function getStoredNotifications() {
   }
 }
 
-async function saveStoredNotifications(records: NotificationRecord[]) {
-  await AsyncStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(records));
+async function getStoredNotifications(employeeId?: number | string | null) {
+  const { notificationsKey } = getStorageContext(employeeId);
+  const scoped = await parseArrayStorageValue(notificationsKey);
+  if (scoped.length > 0) {
+    return scoped;
+  }
+  return parseArrayStorageValue(LEGACY_NOTIFICATION_STORAGE_KEY);
 }
 
-async function getScheduledNotificationIds() {
-  const raw = await AsyncStorage.getItem(NOTIFICATION_SCHEDULE_KEY);
-  if (!raw) return [];
-
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === 'string') : [];
-  } catch {
-    return [];
+async function saveStoredNotifications(records: NotificationRecord[], employeeId?: number | string | null) {
+  const { notificationsKey } = getStorageContext(employeeId);
+  await AsyncStorage.setItem(notificationsKey, JSON.stringify(records));
+  await writeCache(getNotificationCenterCacheKey(employeeId), records);
+  if (employeeId != null) {
+    await AsyncStorage.removeItem(LEGACY_NOTIFICATION_STORAGE_KEY);
   }
 }
 
-async function saveScheduledNotificationIds(ids: string[]) {
-  await AsyncStorage.setItem(NOTIFICATION_SCHEDULE_KEY, JSON.stringify(ids));
+async function getScheduledNotificationIds(employeeId?: number | string | null) {
+  const { scheduledKey } = getStorageContext(employeeId);
+  const scoped = await parseArrayStorageValue(scheduledKey);
+  const values = scoped.length > 0 ? scoped : await parseArrayStorageValue(LEGACY_NOTIFICATION_SCHEDULE_KEY);
+  return values.filter((value) => typeof value === 'string');
 }
 
-async function mergeNotificationRecords(incoming: NotificationRecord[]) {
-  const existing = await getStoredNotifications();
+async function saveScheduledNotificationIds(ids: string[], employeeId?: number | string | null) {
+  const { scheduledKey } = getStorageContext(employeeId);
+  await AsyncStorage.setItem(scheduledKey, JSON.stringify(ids));
+  if (employeeId != null) {
+    await AsyncStorage.removeItem(LEGACY_NOTIFICATION_SCHEDULE_KEY);
+  }
+}
+
+async function mergeNotificationRecords(incoming: NotificationRecord[], employeeId?: number | string | null) {
+  const existing = await getStoredNotifications(employeeId);
   const recordMap = new Map<string, NotificationRecord>();
 
   [...existing, ...incoming].forEach((record) => {
@@ -255,24 +300,30 @@ async function mergeNotificationRecords(incoming: NotificationRecord[]) {
     return rightTime - leftTime;
   });
 
-  await saveStoredNotifications(merged);
+  await saveStoredNotifications(merged, employeeId);
   return merged;
 }
 
-async function clearScheduledNotifications() {
+async function clearScheduledNotifications(employeeId?: number | string | null) {
   if (isRunningInExpoGo()) return;
   try {
-    const scheduledIds = await getScheduledNotificationIds();
+    const scheduledIds = await getScheduledNotificationIds(employeeId);
     await Promise.all(
       scheduledIds.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined))
     );
-    await saveScheduledNotificationIds([]);
+    await saveScheduledNotificationIds([], employeeId);
   } catch (error) {
     console.error('Clear scheduled notifications error:', error);
   }
 }
 
-async function scheduleLocalNotification(title: string, body: string, fireDate: Date, data: Record<string, string>) {
+async function scheduleLocalNotification(
+  title: string,
+  body: string,
+  fireDate: Date,
+  data: Record<string, string>,
+  employeeId?: number | string | null,
+) {
   if (isRunningInExpoGo()) return null;
   try {
     const id = await Notifications.scheduleNotificationAsync({
@@ -288,8 +339,8 @@ async function scheduleLocalNotification(title: string, body: string, fireDate: 
       },
     });
 
-    const scheduledIds = await getScheduledNotificationIds();
-    await saveScheduledNotificationIds([...scheduledIds, id]);
+    const scheduledIds = await getScheduledNotificationIds(employeeId);
+    await saveScheduledNotificationIds([...scheduledIds, id], employeeId);
     return id;
   } catch (error) {
     console.error('Schedule local notification error:', error);
@@ -316,6 +367,7 @@ async function presentLocalNotification(title: string, body: string, data: Recor
 }
 
 async function scheduleAttendanceReminders(
+  employeeId: number | string,
   company: CompanyData,
   leaves: LeaveRecord[],
   attendance?: AttendanceRecord | null
@@ -375,7 +427,8 @@ async function scheduleAttendanceReminders(
             type: 'attendance',
             reminder: 'clock-in',
             reminderDate: getDateKey(date),
-          }
+          },
+          employeeId,
         );
       }
     }
@@ -408,7 +461,8 @@ async function scheduleAttendanceReminders(
             type: 'attendance',
             reminder: 'clock-out',
             reminderDate: getDateKey(date),
-          }
+          },
+          employeeId,
         );
       }
     }
@@ -438,17 +492,20 @@ async function buildLeaveNotifications(leaves: LeaveRecord[]) {
     });
 }
 
-function getRecentDateKeys(days: number) {
-  const now = new Date();
+function buildDateKeysInRange(startDate: Date, endDate: Date) {
   const keys: string[] = [];
 
-  for (let index = 0; index < days; index += 1) {
-    const date = new Date(now);
-    date.setDate(now.getDate() - index);
-    keys.push(getDateKey(date));
+  for (let cursor = new Date(startDate); cursor <= endDate; cursor.setDate(cursor.getDate() + 1)) {
+    keys.push(getDateKey(new Date(cursor)));
   }
 
   return keys;
+}
+
+function getCurrentMonthDateKeys() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), 1);
+  return buildDateKeysInRange(start, now);
 }
 
 function formatDeductionAmount(amount?: number, currency?: string) {
@@ -457,18 +514,50 @@ function formatDeductionAmount(amount?: number, currency?: string) {
   return formatCurrency(value, normalizeCurrencyCode(currency || 'USD'));
 }
 
-async function fetchDeductionNotificationData() {
-  const dateKeys = getRecentDateKeys(DEDUCTION_LOOKBACK_DAYS);
-  const responses = await Promise.all(
-    dateKeys.map((dateKey) =>
-      apiClient
-        .get(API_ENDPOINTS.PAYROLL.MY_DEDUCTION_NOTIFICATIONS(dateKey))
-        .then((response) => response?.data?.data || response?.data || null)
-        .catch(() => null)
-    )
-  );
+async function fetchDeductionNotificationData(options: { forceRefresh?: boolean } = {}) {
+  const { forceRefresh = false } = options;
+  const employee = await getEmployeeContext().catch(() => null);
+  const payrollSummary = await getCachedOrFetch(
+    getPayrollSummaryCacheKey(employee?.id),
+    async () => apiClient
+      .get(API_ENDPOINTS.PAYROLL.MY_SUMMARY())
+      .then((response) => response?.data?.data || response?.data || null)
+      .catch(() => null) as Promise<PayrollSummaryResponse | null>,
+    {
+      ttlMs: CACHE_TTL.PAYROLL_SUMMARY,
+      forceRefresh,
+    },
+  ) as PayrollSummaryResponse | null;
 
-  return responses.filter(Boolean) as DeductionNotificationResponse[];
+  const summaryStart = parseDate(payrollSummary?.periodStartDate);
+  const summaryEnd = parseDate(payrollSummary?.periodEndDate);
+  const today = new Date();
+  const effectiveEnd = summaryEnd && summaryEnd < today ? summaryEnd : today;
+  const periodStartKey = payrollSummary?.periodStartDate || getDateKey(summaryStart || new Date(today.getFullYear(), today.getMonth(), 1));
+  const periodEndKey = payrollSummary?.periodEndDate || getDateKey(effectiveEnd);
+  const dateKeys = summaryStart
+    ? buildDateKeysInRange(summaryStart, effectiveEnd)
+    : getCurrentMonthDateKeys();
+
+  return getCachedOrFetch(
+    getDeductionCacheKey(employee?.id, periodStartKey, periodEndKey),
+    async () => {
+      const responses = await Promise.all(
+        dateKeys.map((dateKey) =>
+          apiClient
+            .get(API_ENDPOINTS.PAYROLL.MY_DEDUCTION_NOTIFICATIONS(dateKey))
+            .then((response) => response?.data?.data || response?.data || null)
+            .catch(() => null)
+        )
+      );
+
+      return responses.filter(Boolean) as DeductionNotificationResponse[];
+    },
+    {
+      ttlMs: CACHE_TTL.NOTIFICATIONS,
+      forceRefresh,
+    },
+  );
 }
 
 function buildDeductionNotifications(responses: DeductionNotificationResponse[]) {
@@ -581,6 +670,7 @@ export async function initializeNotificationSystem() {
     Notifications.addNotificationReceivedListener(async (notification) => {
       const data = (notification.request.content.data || {}) as Record<string, string>;
       const now = new Date().toISOString();
+      const employee = await getEmployeeContext().catch(() => null);
       const category: NotificationCategory =
         data.notificationType === 'deduction' || data.type === 'payroll'
           ? 'deduction'
@@ -599,33 +689,44 @@ export async function initializeNotificationSystem() {
         reasonType: data.reasonType,
       };
 
-      await mergeNotificationRecords([record]);
+      await mergeNotificationRecords([record], employee?.id);
     });
   } catch (error) {
     console.error('Notification setup error:', error);
   }
 }
 
-export async function refreshNotificationCenter() {
+export async function refreshNotificationCenter(options: { forceRefresh?: boolean } = {}) {
+  const { forceRefresh = false } = options;
   try {
     const employee = await getEmployeeContext();
     if (!employee?.id) {
       return [];
     }
 
+    if (!forceRefresh) {
+      const cachedRecords = await readCache<NotificationRecord[]>(
+        getNotificationCenterCacheKey(employee.id),
+        CACHE_TTL.NOTIFICATIONS,
+      );
+      if (cachedRecords && cachedRecords.length > 0) {
+        return cachedRecords;
+      }
+    }
+
     const company = employee.companyId ? await getCompanyById(employee.companyId).catch(() => null) : null;
     const { attendance, leaves } = await fetchAttendanceLeaveData(employee.id);
 
     const leaveNotifications = await buildLeaveNotifications(leaves);
-    const deductionNotifications = buildDeductionNotifications(await fetchDeductionNotificationData());
-    await clearScheduledNotifications();
+    const deductionNotifications = buildDeductionNotifications(await fetchDeductionNotificationData({ forceRefresh }));
+    await clearScheduledNotifications(employee.id);
     const attendanceNotifications = company?.startTime || company?.endTime
-      ? await scheduleAttendanceReminders(company, leaves, attendance)
+      ? await scheduleAttendanceReminders(employee.id, company, leaves, attendance)
       : [];
 
-    const existing = await getStoredNotifications();
+    const existing = await getStoredNotifications(employee.id);
     const preserved = existing.filter((record) => !record.id.startsWith('attendance:clock-'));
-    await saveStoredNotifications(preserved);
+    await saveStoredNotifications(preserved, employee.id);
     const existingIds = new Set(preserved.map((record) => record.id));
     const newDeductionNotifications = deductionNotifications.filter((record) => !existingIds.has(record.id));
 
@@ -633,7 +734,7 @@ export async function refreshNotificationCenter() {
       ...leaveNotifications,
       ...attendanceNotifications,
       ...deductionNotifications,
-    ]);
+    ], employee.id);
 
     await Promise.all(
       newDeductionNotifications.map((record) =>
@@ -655,21 +756,71 @@ export async function refreshNotificationCenter() {
 }
 
 export async function loadNotificationCenter() {
-  return getStoredNotifications();
+  const employee = await getEmployeeContext().catch(() => null);
+  const cachedRecords = await readCache<NotificationRecord[]>(
+    getNotificationCenterCacheKey(employee?.id),
+    CACHE_TTL.NOTIFICATIONS,
+  );
+  if (cachedRecords) {
+    return cachedRecords;
+  }
+  return getStoredNotifications(employee?.id);
 }
 
 export async function markNotificationRead(id: string) {
-  const records = await getStoredNotifications();
+  const employee = await getEmployeeContext().catch(() => null);
+  const records = await getStoredNotifications(employee?.id);
   const updated = records.map((record) => (
     record.id === id ? { ...record, read: true } : record
   ));
-  await saveStoredNotifications(updated);
+  await saveStoredNotifications(updated, employee?.id);
   return updated;
 }
 
 export async function markAllNotificationsRead() {
-  const records = await getStoredNotifications();
+  const employee = await getEmployeeContext().catch(() => null);
+  const records = await getStoredNotifications(employee?.id);
   const updated = records.map((record) => ({ ...record, read: true }));
-  await saveStoredNotifications(updated);
+  await saveStoredNotifications(updated, employee?.id);
   return updated;
+}
+
+export async function clearAllNotificationState() {
+  try {
+    const allKeys = await AsyncStorage.getAllKeys();
+    const scheduledKeys = allKeys.filter((key) =>
+      key === LEGACY_NOTIFICATION_SCHEDULE_KEY || key.startsWith(`${NOTIFICATION_SCHEDULE_PREFIX}:`)
+    );
+    const notificationKeys = allKeys.filter((key) =>
+      key === LEGACY_NOTIFICATION_STORAGE_KEY || key.startsWith(`${NOTIFICATION_STORAGE_PREFIX}:`)
+    );
+
+    if (!isRunningInExpoGo()) {
+      const scheduledGroups = await Promise.all(scheduledKeys.map((key) => parseArrayStorageValue(key)));
+      const scheduledIds = scheduledGroups
+        .flat()
+        .filter((value): value is string => typeof value === 'string');
+
+      await Promise.all(
+        scheduledIds.map((id) => Notifications.cancelScheduledNotificationAsync(id).catch(() => undefined))
+      );
+    }
+
+    const removableKeys = [...new Set([...scheduledKeys, ...notificationKeys])];
+    if (removableKeys.length > 0) {
+      await AsyncStorage.multiRemove(removableKeys);
+    }
+
+    const cachedKeys = allKeys.filter((key) =>
+      key.startsWith(STORAGE_KEYS.NOTIFICATION_CENTER_CACHE)
+      || key.startsWith(STORAGE_KEYS.NOTIFICATION_DEDUCTION_CACHE)
+      || key.startsWith(STORAGE_KEYS.PAYROLL_SUMMARY_CACHE)
+    );
+    if (cachedKeys.length > 0) {
+      await AsyncStorage.multiRemove(cachedKeys);
+      await Promise.all(cachedKeys.map((key) => removeCache(key)));
+    }
+  } catch (error) {
+    console.error('Clear all notification state error:', error);
+  }
 }

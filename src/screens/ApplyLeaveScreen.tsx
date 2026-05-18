@@ -61,6 +61,11 @@ interface LeaveBalance {
   extraUsed: number;
 }
 
+interface ExistingLeaveRequest {
+  startDate: string;
+  endDate: string;
+}
+
 const getDaysInMonth = (year: number, month: number) => {
   return new Date(year, month + 1, 0).getDate();
 };
@@ -68,6 +73,30 @@ const getDaysInMonth = (year: number, month: number) => {
 const getFirstDayOfMonth = (year: number, month: number) => {
   return new Date(year, month, 1).getDay();
 };
+
+const toDateKey = (value?: string | null) => {
+  if (!value) return '';
+  return value.split('T')[0];
+};
+
+const rangesOverlap = (
+  leftStart: string,
+  leftEnd: string,
+  rightStart: string,
+  rightEnd: string,
+) => leftStart <= rightEnd && leftEnd >= rightStart;
+
+const hasLeaveConflict = (
+  leaves: ExistingLeaveRequest[],
+  startDate: string,
+  endDate: string,
+) =>
+  leaves.some((leave) => {
+    const leaveStart = toDateKey(leave.startDate);
+    const leaveEnd = toDateKey(leave.endDate);
+    if (!leaveStart || !leaveEnd) return false;
+    return rangesOverlap(startDate, endDate, leaveStart, leaveEnd);
+  });
 
 const generateCalendarDays = (
   year: number,
@@ -265,6 +294,29 @@ export default function ApplyLeaveScreen({ navigation }: any) {
 
       setEmployee(freshEmployee);
 
+      const currentLeavesResponse = await apiClient.get(
+        API_ENDPOINTS.LEAVE.MY_LEAVES(freshEmployee.id),
+      );
+      if (currentLeavesResponse.data?.isSuccess === false) {
+        Alert.alert('Error', currentLeavesResponse.data?.error || 'Unable to verify leave history. Please try again.');
+        return;
+      }
+      const currentLeaves = Array.isArray(currentLeavesResponse.data?.data)
+        ? currentLeavesResponse.data.data
+        : [];
+
+      const startDateKey = selectedRange.start.toISOString().split('T')[0];
+      const endDateKey = selectedRange.end.toISOString().split('T')[0];
+      const hasConflict = hasLeaveConflict(
+        currentLeaves,
+        startDateKey,
+        endDateKey,
+      );
+      if (hasConflict) {
+        Alert.alert('Error', "You've already requested leave on that day.");
+        return;
+      }
+
       const payload = {
         employeeId: freshEmployee.id,
         leaveTypeId: selectedLeaveType,
@@ -284,7 +336,7 @@ export default function ApplyLeaveScreen({ navigation }: any) {
       Alert.alert(
         'Success',
         'Leave request submitted successfully',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
+        [{ text: 'OK', onPress: () => navigation.navigate('DashboardMain') }]
       );
     } catch (error: any) {
       const msg = error?.response?.data?.error || error?.message || 'Failed to submit leave request';

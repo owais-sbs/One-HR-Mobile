@@ -22,6 +22,7 @@ import { getCompanyById } from "../api/companyService";
 import { normalizeEmployeeData } from "../utils/employeeData";
 import { getCurrencySymbol, normalizeCurrencyCode } from "../utils/currency";
 import { useCurrency } from "../context/CurrencyContext";
+import { clearAllNotificationState } from "../services/notificationService";
 import logo from "../assets/onehr-logo.png";
 
 export default function LoginScreen({ navigation }: any) {
@@ -94,6 +95,7 @@ export default function LoginScreen({ navigation }: any) {
       const companyCacheKeys = allKeys.filter((k) =>
         k.startsWith(STORAGE_KEYS.COMPANY_DATA),
       );
+      await clearAllNotificationState();
       await AsyncStorage.multiRemove([
         ...companyCacheKeys,
         STORAGE_KEYS.EMPLOYEE_DATA,
