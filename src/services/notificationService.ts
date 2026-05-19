@@ -9,6 +9,7 @@ import { getCurrentEmployee } from '../api/employeeService';
 import { normalizeEmployeeData } from '../utils/employeeData';
 import { formatCurrency, normalizeCurrencyCode } from '../utils/currency';
 import { getCachedOrFetch, readCache, removeCache, writeCache } from '../utils/cache';
+import { getCurrentCompanyDate } from '../utils/companyTime';
 
 function isRunningInExpoGo(): boolean {
   return Constants.appOwnership === 'expo';
@@ -44,6 +45,9 @@ type EmployeeData = {
 type CompanyData = {
   startTime?: string;
   endTime?: string;
+  timezone?: string;
+  gracePeriod?: number;
+  gracePeriodMinutes?: number;
   workingDays?: Record<string, boolean>;
 };
 
@@ -84,6 +88,10 @@ type DeductionNotificationResponse = {
 type PayrollSummaryResponse = {
   periodStartDate?: string;
   periodEndDate?: string;
+};
+
+type PayrollRulesResponse = {
+  gracePeriodMinutes?: number;
 };
 
 const NOTIFICATION_STORAGE_PREFIX = '@onehr.notifications.v2';
@@ -560,6 +568,22 @@ async function fetchDeductionNotificationData(options: { forceRefresh?: boolean 
   );
 }
 
+async function fetchPayrollRules(companyId?: number, options: { forceRefresh?: boolean } = {}) {
+  if (!companyId) return null;
+
+  return getCachedOrFetch(
+    buildScopedStorageKey(STORAGE_KEYS.PAYROLL_RULES_CACHE, companyId),
+    async () => apiClient
+      .get(API_ENDPOINTS.PAYROLL_DEDUCTIONS.BY_COMPANY(companyId))
+      .then((response) => response?.data?.data || response?.data || null)
+      .catch(() => null) as Promise<PayrollRulesResponse | null>,
+    {
+      ttlMs: CACHE_TTL.PAYROLL_SUMMARY,
+      forceRefresh: options.forceRefresh,
+    },
+  ) as Promise<PayrollRulesResponse | null>;
+}
+
 function buildDeductionNotifications(responses: DeductionNotificationResponse[]) {
   const now = new Date().toISOString();
   const records: NotificationRecord[] = [];
@@ -598,6 +622,98 @@ function buildDeductionNotifications(responses: DeductionNotificationResponse[])
   });
 
   return records;
+}
+
+function getResponseDateKey(response?: DeductionNotificationResponse) {
+  const dateValue = response?.date;
+  if (!dateValue) return getDateKey(new Date());
+
+  const keyMatch = dateValue.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (keyMatch) {
+    return keyMatch[1];
+  }
+
+  const parsed = parseDate(dateValue);
+  return parsed ? getDateKey(parsed) : getDateKey(new Date());
+}
+
+function getShiftEndBoundary(now: Date, company?: CompanyData | null) {
+  const endDate = parseTimeOnDate(now, company?.endTime);
+  if (!endDate) return null;
+
+  const startDate = parseTimeOnDate(now, company?.startTime);
+  if (startDate && endDate <= startDate) {
+    endDate.setDate(endDate.getDate() + 1);
+  }
+
+  return endDate;
+}
+
+function getGracePeriodMinutes(company?: CompanyData | null, payrollRules?: PayrollRulesResponse | null) {
+  const candidates = [
+    payrollRules?.gracePeriodMinutes,
+    company?.gracePeriodMinutes,
+    company?.gracePeriod,
+  ];
+
+  const value = candidates.find((candidate) => Number.isFinite(Number(candidate)));
+  return Math.max(0, Number(value || 0));
+}
+
+function getLateCutoffBoundary(
+  now: Date,
+  company?: CompanyData | null,
+  payrollRules?: PayrollRulesResponse | null,
+) {
+  const startDate = parseTimeOnDate(now, company?.startTime);
+  if (!startDate) return null;
+
+  return new Date(startDate.getTime() + getGracePeriodMinutes(company, payrollRules) * 60 * 1000);
+}
+
+function hasLateArrivalItem(response: DeductionNotificationResponse) {
+  return Array.isArray(response.items)
+    && response.items.some((item) => item?.type === 'LATE_ARRIVAL');
+}
+
+function isDeductionResponseReady(
+  response: DeductionNotificationResponse,
+  company?: CompanyData | null,
+  payrollRules?: PayrollRulesResponse | null,
+) {
+  if (!response?.dayEnded) {
+    return false;
+  }
+
+  const now = getCurrentCompanyDate(company?.timezone);
+  const responseDateKey = getResponseDateKey(response);
+  const todayKey = getDateKey(now);
+
+  if (responseDateKey < todayKey) {
+    return true;
+  }
+
+  if (responseDateKey > todayKey) {
+    return false;
+  }
+
+  if (hasLateArrivalItem(response)) {
+    const lateCutoff = getLateCutoffBoundary(now, company, payrollRules);
+    return lateCutoff ? now > lateCutoff : true;
+  }
+
+  const shiftEnd = getShiftEndBoundary(now, company);
+  return shiftEnd ? now >= shiftEnd : true;
+}
+
+function hasCurrentDayDeduction(records: NotificationRecord[]) {
+  const todayKey = getDateKey(new Date());
+  return records.some((record) => (
+    record.source === 'payroll'
+    && record.category === 'deduction'
+    && record.eventDate
+    && getResponseDateKey({ date: record.eventDate }) === todayKey
+  ));
 }
 
 async function getEmployeeContext() {
@@ -709,23 +825,47 @@ export async function refreshNotificationCenter(options: { forceRefresh?: boolea
         getNotificationCenterCacheKey(employee.id),
         CACHE_TTL.NOTIFICATIONS,
       );
-      if (cachedRecords && cachedRecords.length > 0) {
+      if (cachedRecords && cachedRecords.length > 0 && !hasCurrentDayDeduction(cachedRecords)) {
         return cachedRecords;
       }
     }
 
-    const company = employee.companyId ? await getCompanyById(employee.companyId).catch(() => null) : null;
+    const [company, payrollRules] = await Promise.all([
+      employee.companyId ? getCompanyById(employee.companyId).catch(() => null) : Promise.resolve(null),
+      fetchPayrollRules(employee.companyId, { forceRefresh }),
+    ]);
     const { attendance, leaves } = await fetchAttendanceLeaveData(employee.id);
 
     const leaveNotifications = await buildLeaveNotifications(leaves);
-    const deductionNotifications = buildDeductionNotifications(await fetchDeductionNotificationData({ forceRefresh }));
+    const deductionResponses = await fetchDeductionNotificationData({ forceRefresh });
+    const readyDeductionResponses: DeductionNotificationResponse[] = [];
+    const deferredDeductionDates = new Set<string>();
+    deductionResponses.forEach((response) => {
+      if (isDeductionResponseReady(response, company, payrollRules)) {
+        readyDeductionResponses.push(response);
+      } else {
+        deferredDeductionDates.add(getResponseDateKey(response));
+      }
+    });
+    const deductionNotifications = buildDeductionNotifications(readyDeductionResponses);
     await clearScheduledNotifications(employee.id);
     const attendanceNotifications = company?.startTime || company?.endTime
       ? await scheduleAttendanceReminders(employee.id, company, leaves, attendance)
       : [];
 
     const existing = await getStoredNotifications(employee.id);
-    const preserved = existing.filter((record) => !record.id.startsWith('attendance:clock-'));
+    const preserved = existing.filter((record) => {
+      if (record.id.startsWith('attendance:clock-')) {
+        return false;
+      }
+
+      return !(
+        record.source === 'payroll'
+        && record.category === 'deduction'
+        && record.eventDate
+        && deferredDeductionDates.has(getResponseDateKey({ date: record.eventDate }))
+      );
+    });
     await saveStoredNotifications(preserved, employee.id);
     const existingIds = new Set(preserved.map((record) => record.id));
     const newDeductionNotifications = deductionNotifications.filter((record) => !existingIds.has(record.id));
@@ -815,6 +955,7 @@ export async function clearAllNotificationState() {
       key.startsWith(STORAGE_KEYS.NOTIFICATION_CENTER_CACHE)
       || key.startsWith(STORAGE_KEYS.NOTIFICATION_DEDUCTION_CACHE)
       || key.startsWith(STORAGE_KEYS.PAYROLL_SUMMARY_CACHE)
+      || key.startsWith(STORAGE_KEYS.PAYROLL_RULES_CACHE)
     );
     if (cachedKeys.length > 0) {
       await AsyncStorage.multiRemove(cachedKeys);

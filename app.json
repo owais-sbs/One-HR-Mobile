@@ -30,10 +30,12 @@
       "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
       ],
       "package": "com.kiranloka.onehrmobile",
-      "versionCode": 5
+      "versionCode": 6
     },
     "plugins": [
       "expo-font",
@@ -50,6 +52,10 @@
         "projectId": "31d0778a-0014-4bed-ac94-2932adb0934e"
       }
     },
-    "owner": "kiranloka"
+    "owner": "kiranloka",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/31d0778a-0014-4bed-ac94-2932adb0934e"
+    }
   }
 }

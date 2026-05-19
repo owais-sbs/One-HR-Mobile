@@ -43,6 +43,31 @@ function formatPayrollPeriodLabel(startDate?: string, endDate?: string, fallback
   return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`;
 }
 
+function toNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function firstPositiveNumber(values: unknown[]) {
+  return values.map(toNumber).find((value) => value > 0) || 0;
+}
+
+function getAbsenceRuleAmount(payrollRules: any) {
+  return firstPositiveNumber([
+    payrollRules?.absenceDeductionAmountPerDay,
+    payrollRules?.deductionAmountPerAbsentDay,
+    payrollRules?.absenceAmountPerDay,
+    payrollRules?.absentDeductionPerDay,
+  ]);
+}
+
+type DeductionDisplayItem = {
+  label: string;
+  amount: number;
+  note: string;
+  alwaysShow: boolean;
+};
+
 export default function SalaryDetailsScreen() {
   const { currency, refreshCurrency } = useCurrency();
   const [employee, setEmployee] = useState<any>(null);
@@ -465,18 +490,36 @@ export default function SalaryDetailsScreen() {
     return normalizeCurrencyCode(resolved || 'USD');
   }, [salaryData, salaryStructure, employee, currency]);
 
-  const lateThreshold = Number(payrollRules?.occurrencesBeforeDeduction || 0);
-  const lateCount = Number(payrollSummary?.lateCount || 0);
-  const deductibleLateDays = Number(payrollSummary?.deductibleLateDays ?? Math.max(0, lateCount - lateThreshold));
-  const annualSalary = Number(payrollSummary?.baseSalary ?? salaryData?.baseSalary ?? 0);
-  const currentMonthPayable = Number(payrollSummary?.finalSalary ?? netSalary ?? 0);
-  const currentMonthGross = Number(payrollSummary?.periodBaseSalary || 0) + Number(payrollSummary?.totalAllowances || 0);
-  const approvedLeaveDays = Number(payrollSummary?.approvedLeaveDays || 0);
-  const deductibleLeaveDays = Number(payrollSummary?.leaveDays || 0);
-  const absentDays = Number(payrollSummary?.absentDays || 0);
-  const halfDayCount = Number(payrollSummary?.halfDayCount || 0);
-  const workingDaysCount = Number(payrollSummary?.workingDaysCount || 0);
-  const presentDays = Number(payrollSummary?.presentDays || 0);
+  const lateThreshold = toNumber(payrollRules?.occurrencesBeforeDeduction);
+  const lateGraceMinutes = toNumber(payrollRules?.gracePeriodMinutes);
+  const lateDeductionAmountPerDay = toNumber(payrollRules?.deductionAmountPerDay);
+  const lateCount = toNumber(payrollSummary?.lateCount);
+  const deductibleLateDays = toNumber(payrollSummary?.deductibleLateDays ?? Math.max(0, lateCount - lateThreshold));
+  const annualSalary = firstPositiveNumber([payrollSummary?.baseSalary, salaryData?.baseSalary, salaryData?.annualSalary]);
+  const monthlyGrossSalary = React.useMemo<number>(() => {
+    const explicitMonthlyGross = firstPositiveNumber([
+      payrollSummary?.monthlyGrossSalary,
+      payrollSummary?.grossMonthlySalary,
+      payrollSummary?.monthlyGross,
+      salaryData?.monthlyGrossSalary,
+      salaryData?.grossMonthlySalary,
+    ]);
+    if (explicitMonthlyGross > 0 && explicitMonthlyGross !== annualSalary) {
+      return explicitMonthlyGross;
+    }
+    if (annualSalary > 0) {
+      return annualSalary / 12;
+    }
+    return firstPositiveNumber([salaryData?.grossSalary, payrollSummary?.periodBaseSalary]);
+  }, [annualSalary, payrollSummary, salaryData]);
+  const currentMonthPayable = toNumber(payrollSummary?.finalSalary ?? netSalary);
+  const approvedLeaveDays = toNumber(payrollSummary?.approvedLeaveDays);
+  const deductibleLeaveDays = toNumber(payrollSummary?.leaveDays);
+  const absentDays = toNumber(payrollSummary?.absentDays);
+  const absenceRuleAmount = getAbsenceRuleAmount(payrollRules);
+  const halfDayCount = toNumber(payrollSummary?.halfDayCount);
+  const workingDaysCount = toNumber(payrollSummary?.workingDaysCount);
+  const presentDays = toNumber(payrollSummary?.presentDays);
 
   const displayedEarnings = React.useMemo(() => (
     earnings.length > 0
@@ -487,41 +530,60 @@ export default function SalaryDetailsScreen() {
       ].filter((item) => item.amount > 0)
   ), [earnings, payrollSummary]);
 
-  const monthlyPayrollDeductions = React.useMemo(() => {
+  const monthlyPayrollDeductions = React.useMemo<DeductionDisplayItem[]>(() => {
     if (!payrollSummary) return [];
 
-    const items = [
+    const items: DeductionDisplayItem[] = [
       {
         label: 'Structure Deductions',
-        amount: Number(payrollSummary.totalDeductions || 0),
+        amount: toNumber(payrollSummary.totalDeductions),
         note: 'Recurring salary deductions configured on the salary structure.',
+        alwaysShow: false,
       },
       {
         label: 'Late Arrival',
-        amount: Number(payrollSummary.lateDeduction || 0),
+        amount: toNumber(payrollSummary.lateDeduction),
         note: lateThreshold > 0
-          ? `${lateCount} late arrivals this month. First ${lateThreshold} are free, ${deductibleLateDays} charged.`
-          : `${lateCount} late arrivals this month.`,
+          ? `Configured: first ${lateThreshold} late arrival${lateThreshold === 1 ? '' : 's'} free, ${formatCurrency(lateDeductionAmountPerDay, effectiveCurrency)} per charged late day after ${lateGraceMinutes} min grace. Calculated: ${lateCount} late arrival${lateCount === 1 ? '' : 's'}, ${deductibleLateDays} charged.`
+          : `Configured: deduct immediately after ${lateGraceMinutes} min grace at ${formatCurrency(lateDeductionAmountPerDay, effectiveCurrency)} per charged late day. Calculated: ${lateCount} late arrival${lateCount === 1 ? '' : 's'}, ${deductibleLateDays} charged.`,
+        alwaysShow: true,
       },
       {
         label: 'Half Day',
-        amount: Number(payrollSummary.halfDayDeduction || 0),
-        note: `${Number(payrollSummary.halfDayCount || 0)} half days recorded this month.`,
+        amount: toNumber(payrollSummary.halfDayDeduction),
+        note: `${halfDayCount} half day${halfDayCount === 1 ? '' : 's'} recorded this month.`,
+        alwaysShow: false,
       },
       {
         label: 'Leave Deduction',
-        amount: Number(payrollSummary.extraLeaveDeduction || 0),
+        amount: toNumber(payrollSummary.extraLeaveDeduction),
         note: `${deductibleLeaveDays} deductible leave day${deductibleLeaveDays === 1 ? '' : 's'} in this payroll period. Approved leave is excluded from absence deductions.`,
+        alwaysShow: false,
       },
       {
         label: 'Absence Deduction',
-        amount: Number(payrollSummary.absenceDeduction || 0),
-        note: `${absentDays} absent working day${absentDays === 1 ? '' : 's'} with no attendance and no approved leave in this payroll period.`,
+        amount: toNumber(payrollSummary.absenceDeduction),
+        note: absenceRuleAmount > 0
+          ? `Configured: ${formatCurrency(absenceRuleAmount, effectiveCurrency)} per absent working day. Calculated: ${absentDays} absent working day${absentDays === 1 ? '' : 's'} with no attendance and no approved leave.`
+          : `Configured: calculated by payroll policy. Calculated: ${absentDays} absent working day${absentDays === 1 ? '' : 's'} with no attendance and no approved leave.`,
+        alwaysShow: true,
       },
     ];
 
-    return items.filter((item) => item.amount > 0 || item.label === 'Late Arrival');
-  }, [absentDays, deductibleLateDays, deductibleLeaveDays, lateCount, lateThreshold, payrollSummary]);
+    return items.filter((item) => item.alwaysShow || item.amount > 0);
+  }, [
+    absenceRuleAmount,
+    absentDays,
+    deductibleLateDays,
+    deductibleLeaveDays,
+    effectiveCurrency,
+    halfDayCount,
+    lateCount,
+    lateDeductionAmountPerDay,
+    lateGraceMinutes,
+    lateThreshold,
+    payrollSummary,
+  ]);
 
   if (loading) {
     return (
@@ -649,15 +711,15 @@ export default function SalaryDetailsScreen() {
               </View>
               <View style={styles.structureMetaItem}>
                 <Text variant="regular" size={11} color={colors.text.muted}>
-                  This Month Gross
+                  Monthly Gross
                 </Text>
                 <Text variant="semibold" size={13} color={colors.text.primary}>
-                  {currentMonthGross > 0 ? formatCurrency(currentMonthGross, effectiveCurrency) : '—'}
+                  {monthlyGrossSalary > 0 ? formatCurrency(monthlyGrossSalary, effectiveCurrency) : '—'}
                 </Text>
               </View>
               <View style={styles.structureMetaItem}>
                 <Text variant="regular" size={11} color={colors.text.muted}>
-                  Payable This Month
+                  Payable After Deductions
                 </Text>
                 <Text variant="semibold" size={13} color={colors.text.primary}>
                   {currentMonthPayable > 0 ? formatCurrency(currentMonthPayable, effectiveCurrency) : '—'}
@@ -756,8 +818,8 @@ export default function SalaryDetailsScreen() {
               </Text>
               <Text variant="regular" size={12} color={colors.text.secondary} style={styles.infoCardText}>
                 {lateThreshold > 0
-                  ? `After ${lateThreshold} late arrivals in a month, ${formatCurrency(Number(payrollRules?.deductionAmountPerDay || 0), effectiveCurrency)} is deducted per late day after a ${Number(payrollRules?.gracePeriodMinutes || 0)} minute grace period.`
-                  : `Late arrivals start deducting immediately after the ${Number(payrollRules?.gracePeriodMinutes || 0)} minute grace period.`}
+                  ? `After ${lateThreshold} late arrival${lateThreshold === 1 ? '' : 's'} in a month, ${formatCurrency(lateDeductionAmountPerDay, effectiveCurrency)} is deducted per charged late day after a ${lateGraceMinutes} minute grace period.`
+                  : `Late arrivals start deducting immediately after the ${lateGraceMinutes} minute grace period at ${formatCurrency(lateDeductionAmountPerDay, effectiveCurrency)} per charged late day.`}
               </Text>
             </View>
           )}

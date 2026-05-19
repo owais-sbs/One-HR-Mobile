@@ -175,7 +175,7 @@ export default function NotificationScreen() {
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <ScreenHeader title="Notifications" />
       <View style={styles.actionsRow}>
-        <Text variant="medium" size={12} color={colors.text.muted}>
+        <Text variant="medium" size={12} color={colors.text.muted} style={styles.subtitleText}>
           Attendance, leave, and payroll deduction updates
         </Text>
         <Pressable
@@ -224,14 +224,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 6,
-    paddingBottom: 8,
+    paddingTop: 12,
+    paddingBottom: 10,
+  },
+  subtitleText: {
+    flex: 1,
+    marginRight: 12,
   },
   markAllButton: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
     backgroundColor: '#EEF2FF',
+    flexShrink: 0,
   },
   markAllButtonPressed: {
     opacity: 0.8,

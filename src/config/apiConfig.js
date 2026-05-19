@@ -196,6 +196,7 @@ export const STORAGE_KEYS = {
   NOTIFICATION_CENTER_CACHE: "notificationCenterCache",
   NOTIFICATION_DEDUCTION_CACHE: "notificationDeductionCache",
   PAYROLL_SUMMARY_CACHE: "payrollSummaryCache",
+  PAYROLL_RULES_CACHE: "payrollRulesCache",
   LOCATION_PERMISSION: "locationPermission",
 };
 
