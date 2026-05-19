@@ -64,6 +64,7 @@ type LeaveRecord = {
 type AttendanceRecord = {
   inTime?: string;
   outTime?: string | null;
+  status?: string;
 };
 
 type DeductionNotificationItem = {
@@ -601,7 +602,7 @@ function buildDeductionNotifications(responses: DeductionNotificationResponse[])
       const createdAt = response.date ? `${response.date}T23:59:00` : now;
 
       records.push({
-        id: `deduction:${response.employeeId || 'me'}:${response.date || getDateKey(new Date())}:${item.type}`,
+        id: getDeductionRecordId(response, item),
         title: item.title || 'Payroll Deduction',
         subtitle,
         timeLabel: buildNotificationTimeLabel(createdAt),
@@ -622,6 +623,10 @@ function buildDeductionNotifications(responses: DeductionNotificationResponse[])
   });
 
   return records;
+}
+
+function getDeductionRecordId(response: DeductionNotificationResponse, item: DeductionNotificationItem) {
+  return `deduction:${response.employeeId || 'me'}:${response.date || getDateKey(new Date())}:${item.type}`;
 }
 
 function getResponseDateKey(response?: DeductionNotificationResponse) {
@@ -671,39 +676,83 @@ function getLateCutoffBoundary(
   return new Date(startDate.getTime() + getGracePeriodMinutes(company, payrollRules) * 60 * 1000);
 }
 
-function hasLateArrivalItem(response: DeductionNotificationResponse) {
-  return Array.isArray(response.items)
-    && response.items.some((item) => item?.type === 'LATE_ARRIVAL');
+function getAttendanceClockIn(attendance?: AttendanceRecord | null) {
+  return parseDate(attendance?.inTime);
 }
 
-function isDeductionResponseReady(
+function didClockInBeforeOrAt(attendance: AttendanceRecord | null | undefined, boundary: Date) {
+  const inTime = getAttendanceClockIn(attendance);
+  return Boolean(inTime && inTime.getTime() <= boundary.getTime());
+}
+
+function shouldShowTodayDeductionItem(
+  item: DeductionNotificationItem,
+  now: Date,
   response: DeductionNotificationResponse,
   company?: CompanyData | null,
   payrollRules?: PayrollRulesResponse | null,
+  attendance?: AttendanceRecord | null,
 ) {
-  if (!response?.dayEnded) {
-    return false;
+  if (item.type === 'LATE_ARRIVAL') {
+    const lateCutoff = getLateCutoffBoundary(now, company, payrollRules);
+    if (lateCutoff && now <= lateCutoff) {
+      return false;
+    }
+    if (lateCutoff && didClockInBeforeOrAt(attendance, lateCutoff)) {
+      return false;
+    }
+    return true;
+  }
+
+  if (item.type === 'ABSENCE') {
+    if (getAttendanceClockIn(attendance)) {
+      return false;
+    }
+    const shiftEnd = getShiftEndBoundary(now, company);
+    return shiftEnd ? now >= shiftEnd : Boolean(response.dayEnded);
+  }
+
+  const shiftEnd = getShiftEndBoundary(now, company);
+  return shiftEnd ? now >= shiftEnd : Boolean(response.dayEnded);
+}
+
+function filterReadyDeductionResponse(
+  response: DeductionNotificationResponse,
+  company?: CompanyData | null,
+  payrollRules?: PayrollRulesResponse | null,
+  attendance?: AttendanceRecord | null,
+) {
+  if (!Array.isArray(response.items) || response.items.length === 0) {
+    return { ready: null, deferredIds: [] as string[] };
   }
 
   const now = getCurrentCompanyDate(company?.timezone);
   const responseDateKey = getResponseDateKey(response);
   const todayKey = getDateKey(now);
+  const readyItems: DeductionNotificationItem[] = [];
+  const deferredIds: string[] = [];
 
-  if (responseDateKey < todayKey) {
-    return true;
-  }
+  response.items.forEach((item) => {
+    if (!item?.type) return;
 
-  if (responseDateKey > todayKey) {
-    return false;
-  }
+    let isReady = false;
+    if (responseDateKey < todayKey) {
+      isReady = Boolean(response.dayEnded);
+    } else if (responseDateKey === todayKey) {
+      isReady = shouldShowTodayDeductionItem(item, now, response, company, payrollRules, attendance);
+    }
 
-  if (hasLateArrivalItem(response)) {
-    const lateCutoff = getLateCutoffBoundary(now, company, payrollRules);
-    return lateCutoff ? now > lateCutoff : true;
-  }
+    if (isReady) {
+      readyItems.push(item);
+    } else {
+      deferredIds.push(getDeductionRecordId(response, item));
+    }
+  });
 
-  const shiftEnd = getShiftEndBoundary(now, company);
-  return shiftEnd ? now >= shiftEnd : true;
+  return {
+    ready: readyItems.length > 0 ? { ...response, dayEnded: true, items: readyItems } : null,
+    deferredIds,
+  };
 }
 
 function hasCurrentDayDeduction(records: NotificationRecord[]) {
@@ -839,13 +888,13 @@ export async function refreshNotificationCenter(options: { forceRefresh?: boolea
     const leaveNotifications = await buildLeaveNotifications(leaves);
     const deductionResponses = await fetchDeductionNotificationData({ forceRefresh });
     const readyDeductionResponses: DeductionNotificationResponse[] = [];
-    const deferredDeductionDates = new Set<string>();
+    const deferredDeductionIds = new Set<string>();
     deductionResponses.forEach((response) => {
-      if (isDeductionResponseReady(response, company, payrollRules)) {
-        readyDeductionResponses.push(response);
-      } else {
-        deferredDeductionDates.add(getResponseDateKey(response));
+      const filtered = filterReadyDeductionResponse(response, company, payrollRules, attendance);
+      if (filtered.ready) {
+        readyDeductionResponses.push(filtered.ready);
       }
+      filtered.deferredIds.forEach((id) => deferredDeductionIds.add(id));
     });
     const deductionNotifications = buildDeductionNotifications(readyDeductionResponses);
     await clearScheduledNotifications(employee.id);
@@ -862,8 +911,7 @@ export async function refreshNotificationCenter(options: { forceRefresh?: boolea
       return !(
         record.source === 'payroll'
         && record.category === 'deduction'
-        && record.eventDate
-        && deferredDeductionDates.has(getResponseDateKey({ date: record.eventDate }))
+        && deferredDeductionIds.has(record.id)
       );
     });
     await saveStoredNotifications(preserved, employee.id);

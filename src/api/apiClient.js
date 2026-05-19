@@ -45,7 +45,10 @@ apiClient.interceptors.response.use(
       console.error(`[REQUEST ERROR] ${error.message}`);
     }
 
-    if (error.response?.status === 401) {
+    const isAuthRequest = error.config?.url?.includes('/accounts/login')
+      || error.config?.url?.includes('/accounts/refresh');
+
+    if (error.response?.status === 401 && isAuthRequest) {
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.AUTH_TOKEN,
         STORAGE_KEYS.USER_DATA,
