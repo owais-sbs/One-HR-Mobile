@@ -1,7 +1,7 @@
 import React, { useEffect, useCallback, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import { StyleSheet, View } from "react-native";
-import { SafeAreaProvider } from "react-native-safe-area-context";
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
@@ -83,6 +83,7 @@ function ProfileStackScreen() {
 
 function MainTabs() {
   const { currencySymbol } = useCurrency();
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -92,8 +93,9 @@ function MainTabs() {
         headerShown: false,
         tabBarStyle: {
           borderTopColor: colors.border,
-          height: 60,
-          paddingBottom: 10,
+          paddingBottom: Math.max(insets.bottom, 8),
+          paddingTop: 4,
+          height: 56 + Math.max(insets.bottom, 8),
         },
         tabBarLabelStyle: {
           fontFamily: "Poppins_500Medium",

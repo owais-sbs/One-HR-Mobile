@@ -65,6 +65,7 @@ export const API_ENDPOINTS = {
     BY_DEPARTMENT: (departmentId) => `/employee/department/${departmentId}`,
     CREATE: "/employee",
     UPDATE: (id) => `/employee/${id}`,
+    PROFILE_IMAGE: (id) => `/employee/${id}/profile-image`,
   },
   DEPARTMENTS: {
     LIST: "/departments",

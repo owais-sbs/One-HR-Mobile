@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { StyleSheet, View, ScrollView, Pressable, Alert, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
 import { colors } from '../theme/colors';
 import {
   User,
@@ -16,14 +17,22 @@ import {
   Bell,
   Calendar,
   Award,
-  Building2
+  Building2,
+  Camera,
+  Trash2,
 } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import EmployeeAvatar from '../components/ui/EmployeeAvatar';
+import { Snackbar, initialSnackbarState, SnackbarState } from '../components/ui/Snackbar';
 import { STORAGE_KEYS, API_ENDPOINTS, CACHE_TTL } from '../config/apiConfig';
 import apiClient from '../api/apiClient';
+import {
+  deleteEmployeeProfileImage,
+  uploadEmployeeProfileImage,
+} from '../api/employeeService';
 import { normalizeEmployeeData } from '../utils/employeeData';
+import { writeCache } from '../utils/cache';
 import { clearAllNotificationState } from '../services/notificationService';
 
 const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = true, destructive = false }: any) => (
@@ -68,6 +77,18 @@ function calculateTenure(joiningDate?: string) {
   return months > 0 ? `${years}.${Math.round(months / 12 * 10) / 1} yrs` : `${years} yrs`;
 }
 
+function appendImageCacheBuster(employee: any) {
+  if (!employee?.profileImageUrl) {
+    return employee;
+  }
+
+  const separator = employee.profileImageUrl.includes('?') ? '&' : '?';
+  return {
+    ...employee,
+    profileImageUrl: `${employee.profileImageUrl}${separator}t=${Date.now()}`,
+  };
+}
+
 export default function ProfileScreen({ navigation }: any) {
   const [employee, setEmployee] = useState<any>(null);
   const [department, setDepartment] = useState<string>('');
@@ -75,6 +96,27 @@ export default function ProfileScreen({ navigation }: any) {
   const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [savingProfilePhoto, setSavingProfilePhoto] = useState(false);
+  const [snackbar, setSnackbar] = useState<SnackbarState>(initialSnackbarState);
+
+  const showSnackbar = (message: string, type: SnackbarState['type']) => {
+    setSnackbar({ visible: true, message, type });
+  };
+
+  const persistEmployeeProfile = useCallback(async (nextEmployee: any) => {
+    const normalized = normalizeEmployeeData(nextEmployee);
+    if (!normalized) return null;
+
+    setEmployee(normalized);
+    await AsyncStorage.setItem(STORAGE_KEYS.EMPLOYEE_DATA, JSON.stringify(normalized));
+    await Promise.all([
+      writeCache(STORAGE_KEYS.CURRENT_EMPLOYEE_CACHE, normalized),
+      writeCache(STORAGE_KEYS.PROFILE_CACHE, normalized),
+    ]);
+
+    return normalized;
+  }, []);
+
   const loadProfile = useCallback(async (forceRefresh = false) => {
     if (forceRefresh) {
       setRefreshing(true);
@@ -144,7 +186,7 @@ export default function ProfileScreen({ navigation }: any) {
                   timestamp: Date.now(),
                 }));
               }
-            } catch (e) {
+            } catch {
               // ignore department fetch errors
             }
           }
@@ -155,7 +197,7 @@ export default function ProfileScreen({ navigation }: any) {
             const balancesResponse = await apiClient.get(API_ENDPOINTS.LEAVE.BALANCES(freshEmployee.id));
             const balancesData = balancesResponse?.data?.data || balancesResponse?.data || [];
             setLeaveBalances(Array.isArray(balancesData) ? balancesData : []);
-          } catch (e) {
+          } catch {
             setLeaveBalances([]);
           }
         }
@@ -214,6 +256,92 @@ export default function ProfileScreen({ navigation }: any) {
         },
       ]
     );
+  };
+
+  const handleUploadProfilePhoto = async () => {
+    if (!employee?.id || savingProfilePhoto) return;
+
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      showSnackbar('Allow photo library access to update your profile picture.', 'error');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.85,
+    });
+
+    if (result.canceled || !result.assets?.[0]?.uri) {
+      return;
+    }
+
+    try {
+      setSavingProfilePhoto(true);
+      const updated = await uploadEmployeeProfileImage(employee.id, result.assets[0]);
+      await persistEmployeeProfile(appendImageCacheBuster(updated));
+      showSnackbar('Your profile photo has been saved.', 'success');
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Unable to update profile picture. Please try again.';
+      showSnackbar(message, 'error');
+    } finally {
+      setSavingProfilePhoto(false);
+    }
+  };
+
+  const handleRemoveProfilePhoto = async () => {
+    if (!employee?.id || savingProfilePhoto) return;
+
+    try {
+      setSavingProfilePhoto(true);
+      const updated = await deleteEmployeeProfileImage(employee.id);
+      await persistEmployeeProfile({
+        ...updated,
+        profileImageUrl: null,
+      });
+      showSnackbar('Your profile photo has been removed.', 'success');
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Unable to remove profile picture. Please try again.';
+      showSnackbar(message, 'error');
+    } finally {
+      setSavingProfilePhoto(false);
+    }
+  };
+
+  const handleManageProfilePhoto = () => {
+    const options: any[] = [
+      { text: 'Choose Photo', onPress: handleUploadProfilePhoto },
+    ];
+
+    if (employee?.profileImageUrl) {
+      options.push({
+        text: 'Remove Photo',
+        style: 'destructive',
+        onPress: () => {
+          Alert.alert(
+            'Remove photo?',
+            'This will remove your current profile picture.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Remove', style: 'destructive', onPress: handleRemoveProfilePhoto },
+            ],
+          );
+        },
+      });
+    }
+
+    options.push({ text: 'Cancel', style: 'cancel' });
+    Alert.alert('Profile picture', 'Manage your profile photo.', options);
   };
 
   const menuSections = [
@@ -308,7 +436,14 @@ export default function ProfileScreen({ navigation }: any) {
       >
         <View style={styles.profileCard}>
           <View style={styles.avatarSection}>
-            <View style={{ marginRight: 14 }}>
+            <Pressable
+              onPress={handleManageProfilePhoto}
+              disabled={savingProfilePhoto}
+              style={({ pressed }) => [
+                styles.avatarAction,
+                pressed && styles.avatarActionPressed,
+              ]}
+            >
               <EmployeeAvatar
                 firstName={employee?.firstName}
                 lastName={employee?.lastName}
@@ -318,7 +453,12 @@ export default function ProfileScreen({ navigation }: any) {
                 backgroundColor={colors.primary}
                 textColor="#FFFFFF"
               />
-            </View>
+              <View style={styles.cameraBadge}>
+                {savingProfilePhoto
+                  ? <ActivityIndicator size="small" color="#FFFFFF" />
+                  : <Camera size={13} color="#FFFFFF" strokeWidth={2.4} />}
+              </View>
+            </Pressable>
             <View style={styles.profileInfo}>
               <Text variant="bold" size={18} color={colors.text.primary}>
                 {fullName}
@@ -326,6 +466,44 @@ export default function ProfileScreen({ navigation }: any) {
               <Text variant="regular" size={13} color={colors.text.secondary}>
                 {displayRole}
               </Text>
+              <View style={styles.photoActions}>
+                <Pressable
+                  onPress={handleUploadProfilePhoto}
+                  disabled={savingProfilePhoto}
+                  style={({ pressed }) => [
+                    styles.photoButton,
+                    pressed && styles.photoButtonPressed,
+                    savingProfilePhoto && styles.photoButtonDisabled,
+                  ]}
+                >
+                  <Camera size={13} color={colors.secondary} strokeWidth={2.2} />
+                  <Text variant="semibold" size={11} color={colors.secondary}>
+                    {employee?.profileImageUrl ? 'Change photo' : 'Upload photo'}
+                  </Text>
+                </Pressable>
+                {employee?.profileImageUrl && (
+                  <Pressable
+                    onPress={() => {
+                      Alert.alert(
+                        'Remove photo?',
+                        'This will remove your current profile picture.',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Remove', style: 'destructive', onPress: handleRemoveProfilePhoto },
+                        ],
+                      );
+                    }}
+                    disabled={savingProfilePhoto}
+                    style={({ pressed }) => [
+                      styles.removePhotoButton,
+                      pressed && styles.photoButtonPressed,
+                      savingProfilePhoto && styles.photoButtonDisabled,
+                    ]}
+                  >
+                    <Trash2 size={13} color={colors.error} strokeWidth={2.2} />
+                  </Pressable>
+                )}
+              </View>
             </View>
           </View>
 
@@ -413,6 +591,10 @@ export default function ProfileScreen({ navigation }: any) {
           </View>
         ))}
       </ScrollView>
+      <Snackbar
+        {...snackbar}
+        onDismiss={() => setSnackbar(initialSnackbarState)}
+      />
     </SafeAreaView>
   );
 }
@@ -447,8 +629,56 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 16,
   },
+  avatarAction: {
+    marginRight: 14,
+  },
+  avatarActionPressed: {
+    opacity: 0.82,
+  },
+  cameraBadge: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.secondary,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
   profileInfo: {
     flex: 1,
+  },
+  photoActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  photoButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 30,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: colors.accent.blue,
+  },
+  removePhotoButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+  },
+  photoButtonPressed: {
+    opacity: 0.76,
+  },
+  photoButtonDisabled: {
+    opacity: 0.55,
   },
   statsRow: {
     flexDirection: 'row',

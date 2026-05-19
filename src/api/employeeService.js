@@ -1,7 +1,8 @@
 import apiClient from './apiClient';
-import { API_ENDPOINTS, CACHE_TTL, STORAGE_KEYS } from '../config/apiConfig';
+import { API_CONFIG, API_ENDPOINTS, CACHE_TTL, STORAGE_KEYS } from '../config/apiConfig';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCachedOrFetch } from '../utils/cache';
+import { normalizeEmployeeData } from '../utils/employeeData';
 
 export const getAllEmployees = async () => {
   const response = await apiClient.get(API_ENDPOINTS.EMPLOYEES.LIST);
@@ -46,4 +47,42 @@ export const createEmployee = async (payload) => {
 export const updateEmployee = async (id, payload) => {
   const response = await apiClient.put(API_ENDPOINTS.EMPLOYEES.UPDATE(id), payload);
   return response.data;
+};
+
+function unwrapApiResponse(data) {
+  if (data?.isSuccess === false) {
+    throw new Error(data?.error || data?.message || 'Request failed');
+  }
+  return data?.data || data;
+}
+
+export const uploadEmployeeProfileImage = async (id, image) => {
+  const formData = new FormData();
+  const uriParts = String(image.uri || '').split('.');
+  const extension = uriParts.length > 1 ? uriParts[uriParts.length - 1].split('?')[0] : 'jpg';
+  const mimeType = image.mimeType || image.type || `image/${extension === 'jpg' ? 'jpeg' : extension}`;
+
+  formData.append('file', {
+    uri: image.uri,
+    name: image.fileName || `profile-photo.${extension || 'jpg'}`,
+    type: mimeType,
+  });
+
+  const response = await apiClient.post(API_ENDPOINTS.EMPLOYEES.PROFILE_IMAGE(id), formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
+  return normalizeEmployeeData(unwrapApiResponse(response.data));
+};
+
+export const deleteEmployeeProfileImage = async (id) => {
+  const response = await apiClient.delete(API_ENDPOINTS.EMPLOYEES.PROFILE_IMAGE(id));
+  return normalizeEmployeeData(unwrapApiResponse(response.data));
+};
+
+export const getEmployeeProfileImageUrl = (id) => {
+  const baseUrl = API_CONFIG.BASE_URL.replace(/\/+$/, '');
+  return `${baseUrl}${API_ENDPOINTS.EMPLOYEES.PROFILE_IMAGE(id)}`;
 };

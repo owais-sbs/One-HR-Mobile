@@ -41,6 +41,12 @@
       "expo-font",
       "expo-notifications",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow OneHR to choose a profile picture from your photo library."
+        }
+      ],
+      [
         "expo-location",
         {
           "locationWhenInUsePermission": "Show current location on map."

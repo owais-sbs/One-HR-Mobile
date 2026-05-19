@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Alert, StyleSheet, View, ScrollView, TextInput, Pressable } from 'react-native';
+import { StyleSheet, View, ScrollView, TextInput, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { ShieldCheck, Eye, EyeOff, Fingerprint, Smartphone } from 'lucide-react-native';
 import { Text } from '../components/ui/Typography';
 import { ScreenHeader } from '../components/ui/ScreenHeader';
 import { Button } from '../components/ui/Button';
+import { Snackbar, initialSnackbarState, SnackbarState } from '../components/ui/Snackbar';
 import { changePassword } from '../api/authService';
 
 export default function SecurityScreen({ navigation }: any) {
@@ -14,18 +15,23 @@ export default function SecurityScreen({ navigation }: any) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [snackbar, setSnackbar] = useState<SnackbarState>(initialSnackbarState);
+
+  const showSnackbar = (message: string, type: SnackbarState['type']) => {
+    setSnackbar({ visible: true, message, type });
+  };
 
   const handleChangePassword = async () => {
     if (!currentPassword) {
-      Alert.alert('Current password required', 'Enter your current password to continue.');
+      showSnackbar('Enter your current password to continue.', 'error');
       return;
     }
     if (newPassword.length < 8) {
-      Alert.alert('Password too short', 'New password must be at least 8 characters.');
+      showSnackbar('New password must be at least 8 characters.', 'error');
       return;
     }
     if (newPassword !== confirmPassword) {
-      Alert.alert('Passwords do not match', 'Confirm your new password and try again.');
+      showSnackbar('Confirm your new password and try again.', 'error');
       return;
     }
 
@@ -35,13 +41,13 @@ export default function SecurityScreen({ navigation }: any) {
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      Alert.alert('Password changed', 'Your account password has been updated.');
+      showSnackbar('Your account password has been updated.', 'success');
     } catch (error: any) {
       const message =
         error?.response?.data?.error ||
         error?.message ||
         'Unable to change password. Please try again.';
-      Alert.alert('Password change failed', message);
+      showSnackbar(message, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -58,7 +64,7 @@ export default function SecurityScreen({ navigation }: any) {
           </View>
           <View style={styles.bannerText}>
             <Text variant="bold" size={16} color={colors.text.primary}>Your account is secure</Text>
-            <Text variant="medium" size={12} color={colors.text.secondary}>Last changed 3 months ago</Text>
+            <Text variant="medium" size={12} color={colors.text.secondary}>Use a strong password and keep it private.</Text>
           </View>
         </View>
 
@@ -79,6 +85,9 @@ export default function SecurityScreen({ navigation }: any) {
                   onChangeText={setCurrentPassword}
                   placeholder="••••••••"
                   placeholderTextColor={colors.text.muted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="password"
                 />
                 <Pressable onPress={() => setShowPass(!showPass)} style={styles.eyeIcon}>
                   {showPass ? <EyeOff size={18} color={colors.text.muted} /> : <Eye size={18} color={colors.text.muted} />}
@@ -98,6 +107,9 @@ export default function SecurityScreen({ navigation }: any) {
                   onChangeText={setNewPassword}
                   placeholder="••••••••"
                   placeholderTextColor={colors.text.muted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="newPassword"
                 />
               </View>
             </View>
@@ -114,6 +126,9 @@ export default function SecurityScreen({ navigation }: any) {
                   onChangeText={setConfirmPassword}
                   placeholder="••••••••"
                   placeholderTextColor={colors.text.muted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="newPassword"
                 />
               </View>
             </View>
@@ -162,6 +177,10 @@ export default function SecurityScreen({ navigation }: any) {
         </View>
 
       </ScrollView>
+      <Snackbar
+        {...snackbar}
+        onDismiss={() => setSnackbar(initialSnackbarState)}
+      />
     </SafeAreaView>
   );
 }
