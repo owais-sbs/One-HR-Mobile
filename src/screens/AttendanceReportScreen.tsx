@@ -131,7 +131,7 @@ function buildFallbackOutTime(inTime?: string, endTime?: string) {
   return null;
 }
 
-export default function AttendanceReportScreen() {
+export default function AttendanceReportScreen({ navigation }: any) {
   const [attendanceData, setAttendanceData] = useState<AttendanceItem[]>([]);
   const [company, setCompany] = useState<any>(null);
   const [employee, setEmployee] = useState<any>(null);

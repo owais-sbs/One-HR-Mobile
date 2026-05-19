@@ -1275,14 +1275,6 @@ export default function DashboardScreen({ navigation }: any) {
                 </Pressable>
 
                 <View style={styles.bentoCardLarge}>
-                  <Text
-                    variant="semibold"
-                    size={15}
-                    color="#0F172A"
-                    style={styles.chartTitle}
-                  >
-                    Leave Balances
-                  </Text>
                   <CustomPieChart title="Leave Balances" data={leaveChartData} />
                 </View>
               </View>
@@ -1685,9 +1677,7 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 1,
   },
-  chartTitle: {
-    marginBottom: 16,
-  },
+  
 
   // Lists Section
   listSection: {
