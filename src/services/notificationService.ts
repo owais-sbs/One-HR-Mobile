@@ -482,19 +482,28 @@ async function scheduleAttendanceReminders(
   return upcomingReminders;
 }
 
-async function buildLeaveNotifications(leaves: LeaveRecord[]) {
+async function buildLeaveNotifications(leaves: LeaveRecord[], employeeId?: number | string | null) {
+  const threeDaysAgo = new Date();
+  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+  const existing = await getStoredNotifications(employeeId);
+  const existingMap = new Map(existing.map((r) => [r.id, r.read]));
+
   return leaves
     .filter((leave) => String(leave.status).toUpperCase() === 'APPROVED')
     .map((leave) => {
       const approvalDate = leave.approvedAt || leave.startDate || new Date().toISOString();
       const period = formatRangeLabel(leave.startDate, leave.endDate);
+      const id = `leave:approved:${leave.id}`;
+      const parsedDate = parseDate(approvalDate);
+      const alreadyRead = existingMap.get(id);
+      const isOld = alreadyRead !== undefined ? alreadyRead : (parsedDate ? parsedDate < threeDaysAgo : false);
 
       return {
-        id: `leave:approved:${leave.id}`,
+        id,
         title: 'Leave Approved',
         subtitle: `${leave.leaveTypeName || 'Your leave'} for ${period} has been approved.`,
         timeLabel: buildNotificationTimeLabel(approvalDate),
-        read: false,
+        read: isOld,
         category: 'approval',
         source: 'leave',
         createdAt: approvalDate,
@@ -589,6 +598,8 @@ async function fetchPayrollRules(companyId?: number, options: { forceRefresh?: b
 
 function buildDeductionNotifications(responses: DeductionNotificationResponse[]) {
   const now = new Date().toISOString();
+  const threeDaysAgo = new Date();
+  threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
   const records: NotificationRecord[] = [];
 
   responses.forEach((response) => {
@@ -602,13 +613,15 @@ function buildDeductionNotifications(responses: DeductionNotificationResponse[])
       const amountSuffix = item.deductionApplied && amountLabel ? ` Deduction: ${amountLabel}.` : '';
       const subtitle = `${item.message || 'Payroll deduction event recorded.'}${amountSuffix}`;
       const createdAt = response.date ? `${response.date}T23:59:00` : now;
+      const parsedCreatedAt = parseDate(createdAt);
+      const isOld = parsedCreatedAt ? parsedCreatedAt < threeDaysAgo : false;
 
       records.push({
         id: getDeductionRecordId(response, item),
         title: item.title || 'Payroll Deduction',
         subtitle,
         timeLabel: buildNotificationTimeLabel(createdAt),
-        read: false,
+        read: isOld,
         category: 'deduction',
         source: 'payroll',
         createdAt,
@@ -898,7 +911,7 @@ export async function refreshNotificationCenter(options: { forceRefresh?: boolea
     ]);
     const { attendance, leaves } = await fetchAttendanceLeaveData(employee.id);
 
-    const leaveNotifications = await buildLeaveNotifications(leaves);
+    const leaveNotifications = await buildLeaveNotifications(leaves, employee.id);
     const deductionResponses = await fetchDeductionNotificationData({ forceRefresh });
     const readyDeductionResponses: DeductionNotificationResponse[] = [];
     const deferredDeductionIds = new Set<string>();

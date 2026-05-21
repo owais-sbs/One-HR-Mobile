@@ -213,12 +213,12 @@ export default function App() {
       <CurrencyProvider>
         <NavigationContainer>
           <StatusBar style="auto" />
-          <Stack.Navigator
-            screenOptions={{ headerShown: false }}
-            initialRouteName={isAuthenticated ? "Main" : "Login"}
-          >
-            <Stack.Screen name="Login" component={LoginScreen} />
-            <Stack.Screen name="Main" component={MainEntryScreen} />
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            {isAuthenticated ? (
+              <Stack.Screen name="Main" component={MainEntryScreen} />
+            ) : (
+              <Stack.Screen name="Login" component={LoginScreen} />
+            )}
           </Stack.Navigator>
         </NavigationContainer>
       </CurrencyProvider>
