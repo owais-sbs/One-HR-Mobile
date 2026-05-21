@@ -34,6 +34,7 @@ import {
 import { normalizeEmployeeData } from '../utils/employeeData';
 import { writeCache } from '../utils/cache';
 import { clearAllNotificationState } from '../services/notificationService';
+import { useAuth } from '../context/AuthContext';
 
 const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = true, destructive = false }: any) => (
   <Pressable
@@ -90,6 +91,7 @@ function appendImageCacheBuster(employee: any) {
 }
 
 export default function ProfileScreen({ navigation }: any) {
+  const { markUnauthenticated } = useAuth();
   const [employee, setEmployee] = useState<any>(null);
   const [department, setDepartment] = useState<string>('');
   const [roles, setRoles] = useState<string[]>([]);
@@ -248,7 +250,7 @@ export default function ProfileScreen({ navigation }: any) {
                 STORAGE_KEYS.SALARY_STRUCTURE_CACHE,
                 STORAGE_KEYS.SALARY_HISTORY_CACHE,
               ]);
-              navigation.navigate('Login');
+              markUnauthenticated();
             } catch (error) {
               console.error('Sign out error:', error);
             }

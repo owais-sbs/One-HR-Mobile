@@ -12,7 +12,6 @@ import {
   Bell,
 } from "lucide-react-native";
 import * as SplashScreen from "expo-splash-screen";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   useFonts,
   Poppins_400Regular,
@@ -35,9 +34,9 @@ import ApplyLeaveScreen from "./src/screens/ApplyLeaveScreen";
 import LeaveHistoryScreen from "./src/screens/LeaveHistoryScreen";
 import TeamLeavesScreen from "./src/screens/TeamLeavesScreen";
 import { colors } from "./src/theme/colors";
-import { STORAGE_KEYS } from "./src/config/apiConfig";
 import { initializeNotificationSystem } from "./src/services/notificationService";
 import { CurrencyProvider, useCurrency } from "./src/context/CurrencyContext";
+import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { Text } from "./src/components/ui/Typography";
 
 // Keep the splash screen visible while we fetch resources
@@ -167,11 +166,9 @@ export default function App() {
     Poppins_700Bold,
   });
 
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isReady, setIsReady] = useState(false);
-
-  useEffect(() => {
-    checkAuth();
+  const [authReady, setAuthReady] = useState(false);
+  const handleAuthReady = useCallback(() => {
+    setAuthReady(true);
   }, []);
 
   useEffect(() => {
@@ -180,36 +177,28 @@ export default function App() {
     });
   }, []);
 
-  const checkAuth = async () => {
-    try {
-      const token = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
-      const rolesStr = await AsyncStorage.getItem(STORAGE_KEYS.USER_ROLES);
-
-      if (token && rolesStr) {
-        const roles = JSON.parse(rolesStr);
-        if (roles.includes("employee")) {
-          setIsAuthenticated(true);
-        }
-      }
-    } catch (error) {
-      console.error("Auth check error:", error);
-    } finally {
-      setIsReady(true);
+  useEffect(() => {
+    if (fontsLoaded && authReady) {
+      void SplashScreen.hideAsync();
     }
-  };
+  }, [fontsLoaded, authReady]);
 
-  const onLayoutRootView = useCallback(async () => {
-    if (fontsLoaded && isReady) {
-      await SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded, isReady]);
+  return (
+    <AuthProvider onReady={handleAuthReady}>
+      <AppShell fontsLoaded={fontsLoaded} />
+    </AuthProvider>
+  );
+}
 
-  if (!fontsLoaded || !isReady) {
+function AppShell({ fontsLoaded }: { fontsLoaded: boolean }) {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (!fontsLoaded || isLoading) {
     return null;
   }
 
   return (
-    <SafeAreaProvider onLayout={onLayoutRootView}>
+    <SafeAreaProvider>
       <CurrencyProvider>
         <NavigationContainer>
           <StatusBar style="auto" />
@@ -217,7 +206,9 @@ export default function App() {
             {isAuthenticated ? (
               <Stack.Screen name="Main" component={MainEntryScreen} />
             ) : (
-              <Stack.Screen name="Login" component={LoginScreen} />
+              <Stack.Screen name="Login">
+                {(props) => <LoginScreen {...props} />}
+              </Stack.Screen>
             )}
           </Stack.Navigator>
         </NavigationContainer>

@@ -22,10 +22,12 @@ import { getCompanyById } from "../api/companyService";
 import { normalizeEmployeeData } from "../utils/employeeData";
 import { getCurrencySymbol, normalizeCurrencyCode } from "../utils/currency";
 import { useCurrency } from "../context/CurrencyContext";
+import { useAuth } from "../context/AuthContext";
 import logo from "../assets/onehr-logo.png";
 
 export default function LoginScreen({ navigation }: any) {
   const { refreshCurrency } = useCurrency();
+  const { markAuthenticated } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -76,9 +78,13 @@ export default function LoginScreen({ navigation }: any) {
       }
 
       const { userId, token, roles } = loginData;
+      const normalizedRoles = Array.isArray(roles)
+        ? roles
+            .filter((role: unknown): role is string => typeof role === "string")
+            .map((role: string) => role.toLowerCase())
+        : [];
 
-      const hasEmployeeRole =
-        roles && roles.some((r: string) => r.toLowerCase() === "employee");
+      const hasEmployeeRole = normalizedRoles.includes("employee");
 
       if (!hasEmployeeRole) {
         Alert.alert(
@@ -110,7 +116,7 @@ export default function LoginScreen({ navigation }: any) {
       await AsyncStorage.multiSet([
         [STORAGE_KEYS.AUTH_TOKEN, token],
         [STORAGE_KEYS.USER_ID, userId],
-        [STORAGE_KEYS.USER_ROLES, JSON.stringify(roles)],
+        [STORAGE_KEYS.USER_ROLES, JSON.stringify(normalizedRoles)],
       ]);
 
       try {
@@ -170,7 +176,7 @@ export default function LoginScreen({ navigation }: any) {
         await AsyncStorage.setItem(STORAGE_KEYS.LOCATION_PERMISSION, "granted");
       }
 
-      navigation.navigate("Main");
+      markAuthenticated();
     } catch (error: any) {
       console.error("Login error:", error);
       let message = "Login failed. Please try again.";
