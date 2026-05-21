@@ -405,8 +405,10 @@ async function scheduleAttendanceReminders(
     const startDate = parseTimeOnDate(date, company.startTime);
     const endDate = parseTimeOnDate(date, company.endTime);
     const isToday = getDateKey(date) === getDateKey(now);
-    const hasClockedInToday = Boolean(attendance?.inTime);
-    const hasClockedOutToday = Boolean(attendance?.outTime);
+    const hasClockedInToday = Boolean(attendance?.inTime)
+      || attendance?.status === 'CLOCKED_IN'
+      || attendance?.status === 'ON_BREAK';
+    const hasClockedOutToday = attendance?.status === 'CLOCKED_OUT' || Boolean(attendance?.outTime);
 
     if (startDate) {
       const fireDate = new Date(startDate.getTime() - REMINDER_OFFSET_MINUTES * 60 * 1000);
@@ -680,6 +682,17 @@ function getAttendanceClockIn(attendance?: AttendanceRecord | null) {
   return parseDate(attendance?.inTime);
 }
 
+function hasStartedAttendance(attendance?: AttendanceRecord | null) {
+  if (!attendance) {
+    return false;
+  }
+
+  return Boolean(attendance.inTime)
+    || attendance.status === 'CLOCKED_IN'
+    || attendance.status === 'ON_BREAK'
+    || attendance.status === 'CLOCKED_OUT';
+}
+
 function didClockInBeforeOrAt(attendance: AttendanceRecord | null | undefined, boundary: Date) {
   const inTime = getAttendanceClockIn(attendance);
   return Boolean(inTime && inTime.getTime() <= boundary.getTime());
@@ -705,7 +718,7 @@ function shouldShowTodayDeductionItem(
   }
 
   if (item.type === 'ABSENCE') {
-    if (getAttendanceClockIn(attendance)) {
+    if (hasStartedAttendance(attendance)) {
       return false;
     }
     const shiftEnd = getShiftEndBoundary(now, company);
