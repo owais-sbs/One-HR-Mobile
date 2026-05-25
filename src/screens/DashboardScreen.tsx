@@ -96,6 +96,10 @@ function extractTimeFromDateTime(dateTimeStr?: string, referenceDate = new Date(
   return parseCompanyDateTime(dateTimeStr);
 }
 
+function resolveShiftTime(referenceDate: Date, timeValue?: string | null) {
+  return extractTimeFromDateTime(timeValue || undefined, referenceDate);
+}
+
 function getDurationHours(inTime?: string, outTime?: string | null) {
   if (!inTime || !outTime) return 0;
   const start = parseCompanyDateTime(inTime)?.getTime() ?? Number.NaN;
@@ -330,20 +334,20 @@ export default function DashboardScreen({ navigation }: any) {
   useEffect(() => {
     if (!isClockedIn || !company?.endTime) return;
 
-    const endTime = extractTimeFromDateTime(company.endTime);
+    const endTime = resolveShiftTime(getCurrentCompanyDate(company?.timezone), company.endTime);
     if (!endTime) return;
 
     const autoCloseTime = new Date(endTime.getTime() + CLOCK_OUT_GRACE_MS);
     const now = getCurrentCompanyDate(company?.timezone).getTime();
 
     if (now >= autoCloseTime.getTime()) {
-      setIsClockedIn(false);
+      refreshAttendanceState().catch(console.error);
       return;
     }
 
     const timeoutMs = autoCloseTime.getTime() - now;
     const timeout = setTimeout(() => {
-      setIsClockedIn(false);
+      refreshAttendanceState().catch(console.error);
     }, timeoutMs);
 
     return () => clearTimeout(timeout);
@@ -627,7 +631,8 @@ export default function DashboardScreen({ navigation }: any) {
     }
 
     const now = getCurrentCompanyDate(company?.timezone);
-    const startTime = extractTimeFromDateTime(company?.startTime);
+    const startTime = resolveShiftTime(now, company?.startTime);
+    const endTime = resolveShiftTime(now, company?.endTime);
 
     if (startTime) {
       const earliestClockIn = new Date(startTime.getTime() - CLOCK_IN_GRACE_MS);
@@ -636,6 +641,17 @@ export default function DashboardScreen({ navigation }: any) {
         Alert.alert(
           "Too Early",
           `Clock in is only allowed from ${earlyTime} onwards (30 minutes before work start).`,
+        );
+        return;
+      }
+    }
+
+    if (endTime) {
+      const latestClockIn = new Date(endTime.getTime() + CLOCK_OUT_GRACE_MS);
+      if (now >= latestClockIn) {
+        Alert.alert(
+          "Day Ended",
+          "This work day has already ended. You can clock in again on the next working day.",
         );
         return;
       }
@@ -746,8 +762,8 @@ export default function DashboardScreen({ navigation }: any) {
     { type: "Casual", left: 4, total: 5, color: "#F59E0B" },
   ];
 
-  const workStartTime = extractTimeFromDateTime(company?.startTime);
-  const workEndTime = extractTimeFromDateTime(company?.endTime);
+  const workEndTime = resolveShiftTime(currentTime, company?.endTime);
+  const workStartTime = resolveShiftTime(currentTime, company?.startTime);
   const workDurationMs =
     workStartTime && workEndTime
       ? workEndTime.getTime() - workStartTime.getTime()
@@ -797,6 +813,14 @@ export default function DashboardScreen({ navigation }: any) {
     isDateWithinHoliday(currentTime, holiday),
   );
   const isTodayDayOff = isConfiguredDayOff || Boolean(todayHoliday);
+  const dayAutoCloseTime = workEndTime
+    ? new Date(workEndTime.getTime() + CLOCK_OUT_GRACE_MS)
+    : null;
+  const isPastDayAutoClose =
+    Boolean(dayAutoCloseTime) && currentTime.getTime() >= dayAutoCloseTime!.getTime();
+  const isDayClosedForToday =
+    !isTodayDayOff &&
+    (todayAttendance?.status === "CLOCKED_OUT" || Boolean(isPastDayAutoClose));
 
   const combinedAttendanceHistory = useMemo(() => {
     const history = [...attendanceHistory];
@@ -1024,7 +1048,13 @@ export default function DashboardScreen({ navigation }: any) {
                     ]}
                   />
                   <Text variant="medium" size={12} color="#94A3B8">
-                    {isTodayDayOff ? "Day Off" : isClockedIn ? "Clocked In" : "Off the clock"}
+                    {isTodayDayOff
+                      ? "Day Off"
+                      : isDayClosedForToday
+                        ? "Day Ended"
+                        : isClockedIn
+                          ? "Clocked In"
+                          : "Off the clock"}
                   </Text>
                 </View>
                 {company && workStartTime && workEndTime && (
@@ -1127,6 +1157,20 @@ export default function DashboardScreen({ navigation }: any) {
                     </Text>
                   </View>
                 </View>
+              ) : isDayClosedForToday ? (
+                <View style={styles.dayOffPanel}>
+                  <CheckCircle size={18} color="#CBD5E1" />
+                  <View style={styles.dayOffText}>
+                    <Text variant="bold" size={16} color="#FFFFFF">
+                      Day Ended
+                    </Text>
+                    <Text variant="medium" size={12} color="#94A3B8">
+                      {todayAttendance?.outTime
+                        ? `Attendance closed at ${formatTime(todayAttendance.outTime)}.`
+                        : "This work day has already ended. You can clock in again on the next working day."}
+                    </Text>
+                  </View>
+                </View>
               ) : todayAttendance?.status === "ON_BREAK" ? (
                 <View style={styles.actionRow}>
                   <Pressable
@@ -1178,7 +1222,7 @@ export default function DashboardScreen({ navigation }: any) {
               ) : (
                 <Pressable
                   onPress={handleClockIn}
-                  disabled={loading || todayAttendance?.status === "CLOCKED_OUT"}
+                  disabled={loading || isDayClosedForToday}
                   style={[styles.heroButton, styles.heroButtonPrimary]}
                 >
                   {loading ? (
