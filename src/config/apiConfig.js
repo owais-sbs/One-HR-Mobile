@@ -148,6 +148,9 @@ export const API_ENDPOINTS = {
   PAYROLL_DEDUCTIONS: {
     BY_COMPANY: (companyId) => `/payroll-deductions/company/${companyId}`,
   },
+  MOBILE_DEVICES: {
+    PUSH_TOKEN: "/mobile-devices/push-token",
+  },
   SUPER_ADMINS: {
     LIST: "/super-admins",
     CREATE: "/super-admins",

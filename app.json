@@ -35,7 +35,7 @@
         "android.permission.ACCESS_FINE_LOCATION"
       ],
       "package": "com.kiranloka.onehrmobile",
-      "versionCode": 11
+      "versionCode": 12
     },
     "plugins": [
       "expo-font",

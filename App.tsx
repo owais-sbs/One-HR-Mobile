@@ -34,7 +34,7 @@ import ApplyLeaveScreen from "./src/screens/ApplyLeaveScreen";
 import LeaveHistoryScreen from "./src/screens/LeaveHistoryScreen";
 import TeamLeavesScreen from "./src/screens/TeamLeavesScreen";
 import { colors } from "./src/theme/colors";
-import { initializeNotificationSystem } from "./src/services/notificationService";
+import { initializeNotificationSystem, syncRemotePushRegistration } from "./src/services/notificationService";
 import { CurrencyProvider, useCurrency } from "./src/context/CurrencyContext";
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
 import { Text } from "./src/components/ui/Typography";
@@ -192,6 +192,16 @@ export default function App() {
 
 function AppShell({ fontsLoaded }: { fontsLoaded: boolean }) {
   const { isAuthenticated, isLoading } = useAuth();
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
+    syncRemotePushRegistration().catch((error) => {
+      console.error("Push registration sync error:", error);
+    });
+  }, [isAuthenticated]);
 
   if (!fontsLoaded || isLoading) {
     return null;

@@ -33,7 +33,7 @@ import {
 } from '../api/employeeService';
 import { normalizeEmployeeData } from '../utils/employeeData';
 import { writeCache } from '../utils/cache';
-import { clearAllNotificationState } from '../services/notificationService';
+import { clearAllNotificationState, unregisterRemotePushRegistration } from '../services/notificationService';
 import { useAuth } from '../context/AuthContext';
 
 const MenuItem = ({ icon: Icon, label, subtitle, color, action, showChevron = true, destructive = false }: any) => (
@@ -235,6 +235,7 @@ export default function ProfileScreen({ navigation }: any) {
             try {
               const allKeys = await AsyncStorage.getAllKeys();
               const companyCacheKeys = allKeys.filter((k) => k.startsWith(STORAGE_KEYS.COMPANY_DATA));
+              await unregisterRemotePushRegistration();
               await clearAllNotificationState();
               await AsyncStorage.multiRemove([
                 ...companyCacheKeys,

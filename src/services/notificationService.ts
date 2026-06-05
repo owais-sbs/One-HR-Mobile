@@ -99,6 +99,8 @@ const NOTIFICATION_STORAGE_PREFIX = '@onehr.notifications.v2';
 const NOTIFICATION_SCHEDULE_PREFIX = '@onehr.notifications.scheduled.v2';
 const LEGACY_NOTIFICATION_STORAGE_KEY = '@onehr.notifications.v1';
 const LEGACY_NOTIFICATION_SCHEDULE_KEY = '@onehr.notifications.scheduled.v1';
+const PUSH_DEVICE_ID_KEY = '@onehr.push-device-id';
+const REGISTERED_PUSH_TOKEN_KEY = '@onehr.registered-push-token';
 const NOTIFICATION_WINDOW_DAYS = 7;
 const REMINDER_OFFSET_MINUTES = 5;
 
@@ -223,6 +225,22 @@ function buildScopedStorageKey(prefix: string, employeeId?: number | string | nu
   return employeeId != null && employeeId !== ''
     ? `${prefix}:${employeeId}`
     : `${prefix}:anonymous`;
+}
+
+function getExpoProjectId() {
+  const easProjectId = Constants.easConfig?.projectId;
+  if (easProjectId) return easProjectId;
+  const expoConfigProjectId = (Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined)?.eas?.projectId;
+  return expoConfigProjectId || null;
+}
+
+async function getOrCreatePushDeviceId() {
+  const existing = await AsyncStorage.getItem(PUSH_DEVICE_ID_KEY);
+  if (existing) return existing;
+
+  const created = `device-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  await AsyncStorage.setItem(PUSH_DEVICE_ID_KEY, created);
+  return created;
 }
 
 function getStorageContext(employeeId?: number | string | null) {
@@ -884,6 +902,87 @@ export async function initializeNotificationSystem() {
     });
   } catch (error) {
     console.error('Notification setup error:', error);
+  }
+}
+
+export async function syncRemotePushRegistration() {
+  if (isRunningInExpoGo()) {
+    return null;
+  }
+
+  try {
+    const authToken = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!authToken) {
+      return null;
+    }
+
+    const projectId = getExpoProjectId();
+    if (!projectId) {
+      console.warn('Push registration skipped: missing Expo project id.');
+      return null;
+    }
+
+    const permission = await Notifications.getPermissionsAsync();
+    const granted = permission.granted
+      || permission.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+    if (!granted) {
+      const requested = await Notifications.requestPermissionsAsync();
+      const requestGranted = requested.granted
+        || requested.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+      if (!requestGranted) {
+        return null;
+      }
+    }
+
+    const employee = await getEmployeeContext().catch(() => null);
+    if (!employee?.id) {
+      return null;
+    }
+
+    const deviceId = await getOrCreatePushDeviceId();
+    const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
+    const expoPushToken = tokenResponse?.data;
+    if (!expoPushToken) {
+      return null;
+    }
+
+    await apiClient.post(API_ENDPOINTS.MOBILE_DEVICES.PUSH_TOKEN, {
+      expoPushToken,
+      platform: Platform.OS,
+      deviceId,
+    });
+    await AsyncStorage.setItem(REGISTERED_PUSH_TOKEN_KEY, expoPushToken);
+    return expoPushToken;
+  } catch (error) {
+    console.error('Remote push registration error:', error);
+    return null;
+  }
+}
+
+export async function unregisterRemotePushRegistration() {
+  if (isRunningInExpoGo()) {
+    return;
+  }
+
+  try {
+    const authToken = await AsyncStorage.getItem(STORAGE_KEYS.AUTH_TOKEN);
+    if (!authToken) {
+      return;
+    }
+
+    const [expoPushToken, deviceId] = await AsyncStorage.multiGet([
+      REGISTERED_PUSH_TOKEN_KEY,
+      PUSH_DEVICE_ID_KEY,
+    ]);
+
+    await apiClient.delete(API_ENDPOINTS.MOBILE_DEVICES.PUSH_TOKEN, {
+      params: {
+        expoPushToken: expoPushToken[1] || undefined,
+        deviceId: deviceId[1] || undefined,
+      },
+    }).catch(() => undefined);
+  } catch (error) {
+    console.error('Remote push unregister error:', error);
   }
 }
 
